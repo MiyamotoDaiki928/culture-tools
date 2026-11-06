@@ -1,0 +1,8 @@
+app/.venv/
+app/config.json
+app/app.log
+app/app.old.log
+app/app_state.json
+stitch/review/
+__pycache__/
+*.pyc
