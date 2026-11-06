@@ -48,7 +48,6 @@ MEA-Probe（Microelectrode Array Probe：微小電極アレイを備えた培養
 | `stitch` | 合成。合成結果の記録（`review`）もここに保存される |
 | `viewer` | 見比べ |
 | `folders` | フォルダ作成 |
-| `logo` | ロゴの画像（`logo.svg`、`logo.png`） |
 | `タスクバー用のショートカットを作成.bat` | 初回の準備で1回だけ使う |
 | `README.md` | この説明書 |
 | `LICENSE` | ライセンス（MIT License） |
