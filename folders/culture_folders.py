@@ -127,13 +127,13 @@ h2 .sub{font-weight:400;color:var(--quiet);font-size:13px}
 input[type=text]{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;
   padding:5px 8px;font:inherit;color-scheme:dark}
 .list{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-label.row{display:grid;grid-template-columns:28px 80px 1fr auto;align-items:center;gap:8px;padding:10px 16px;
+label.row{display:grid;grid-template-columns:28px 120px 1fr auto;align-items:center;gap:8px;padding:10px 16px;
   border-bottom:1px solid var(--line);cursor:pointer}
 label.row:last-child{border-bottom:0}
 label.row:hover{background:rgba(255,255,255,.03)}
 label.row.off{cursor:default;opacity:.45}
 label.row input{transform:scale(1.25);accent-color:var(--accent)}
-.dish{font-weight:600;font-size:15px}
+.dish{font-weight:600;font-size:15px;white-space:nowrap}
 .seed{color:var(--quiet);font-size:12px}
 .prev{color:var(--quiet);font-size:12px}
 .div{font-weight:600;white-space:nowrap}

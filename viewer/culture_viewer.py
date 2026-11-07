@@ -180,7 +180,7 @@ select{background:#1f1f23;color:var(--ink);border:1px solid var(--line);border-r
 .lg .dot{width:6px;height:6px;border-radius:3px;background:var(--accent)}
 .lg .box{width:10px;height:10px;border:1px dashed var(--quiet);border-radius:3px}
 .row{display:flex;gap:16px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)}
-.rl{width:88px;flex:none;display:flex;flex-direction:column}
+.rl{width:112px;flex:none;white-space:nowrap;display:flex;flex-direction:column}
 .rl b{font-size:14px;font-weight:600}
 .rl span{color:var(--quiet);font-size:11px}
 .chips{display:flex;flex-wrap:wrap;gap:4px}
