@@ -1,3 +1,5 @@
+![culture-tools の概要：フォルダ作成・撮影・合成・見比べ](docs/overview.png)
+
 # culture-tools
 
 MEA-Probe（Microelectrode Array Probe：微小電極アレイを備えた培養器）の培地写真を扱うツールです。撮影前のフォルダ作成、撮影した写真のMEA-Probeごとの振り分け、顕微鏡で6枚に分けて撮った写真の合成、合成画像の見比べを、1つの画面で行います。
@@ -52,6 +54,7 @@ MEA-Probe（Microelectrode Array Probe：微小電極アレイを備えた培養
 | `capture` | 撮影（写真の振り分け） |
 | `タスクバー用のショートカットを作成.bat` | 初回の準備で1回だけ使う |
 | `README.md` | この説明書 |
+| `docs` | この説明書で使う画像（`overview.png`：上の概要図。写真は使わず、図で描いたもの） |
 | `LICENSE` | ライセンス（MIT License） |
 
 ## 初回の準備
