@@ -4,7 +4,7 @@
     pythonw culture_app.py      （黒い画面を出さずに起動する。タスクバーのショートカットから呼ぶ）
     python  culture_app.py      （動作を確かめたいときは、こちらで起動するとメッセージが表示される）
 
-ブラウザで画面を開き、上部の切り替えで「フォルダ作成」「合成」「見比べ」を行き来する。
+ブラウザで画面を開き、上部の切り替えで「フォルダ作成」「撮影」「合成」「見比べ」を行き来する。
 既に起動しているときは新しく起動せず、開いている画面をもう一度開く。
 画面（タブ）をすべて閉じると数秒で終了する。合成の途中は、合成が終わるまで終了しない。
 """
@@ -24,11 +24,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 APP_DIR = Path(__file__).resolve().parent
-for _d in ("stitch", "viewer", "folders"):          # 機能ごとのフォルダから読み込む
+for _d in ("stitch", "viewer", "folders", "capture"):          # 機能ごとのフォルダから読み込む
     sys.path.insert(0, str(APP_DIR.parent / _d))
 import culture_stitch as cs                         # noqa: E402
 import culture_viewer as cv                         # noqa: E402
 import culture_folders as cf                        # noqa: E402
+import culture_capture as cc                        # noqa: E402
 
 APP = "culture-tools"
 ROOT: Path = Path()                                # main() で、初回に選んだ写真のフォルダを入れる
@@ -37,7 +38,7 @@ LOG = APP_DIR / "app.log"                  # 黒い画面がないので、メ�
 CLOSE_GRACE = 8       # 最後の画面が閉じられてから終了するまでの秒数（画面の切り替えでは終了しない）
 STALE = 180           # 画面からの合図がこの秒数届かなければ閉じられたとみなす（裏に回したタブは合図が間引かれるため長め）
 
-TABS = [("folders", "フォルダ作成"), ("stitch", "合成"), ("viewer", "見比べ")]
+TABS = [("folders", "フォルダ作成"), ("capture", "撮影"), ("stitch", "合成"), ("viewer", "見比べ")]
 
 NAV_CSS = """
 header.top .nav{display:flex;gap:2px;margin-left:20px}
@@ -48,6 +49,7 @@ header.top .nav a.on{color:#fafafa;background:rgba(245,158,11,.16)}
 header.top .nav .badge{display:inline-block;min-width:18px;margin-left:6px;padding:0 5px;border-radius:9px;background:#f59e0b;
   color:#111113;font-size:11px;font-weight:700;line-height:18px;text-align:center}
 #quit{display:none !important}
+@media (max-width:640px){header.top .name{display:none} header.top .nav{margin-left:4px} header.top .nav a{padding:6px 9px}}
 #gone{display:none;position:fixed;inset:0;z-index:200;background:rgba(17,17,19,.94);align-items:center;justify-content:center;
   color:#fafafa;font-size:15px;font-family:"Segoe UI","Yu Gothic UI","Meiryo",sans-serif;text-align:center;line-height:1.8}
 """
@@ -137,6 +139,8 @@ def brand(active: str, token: str) -> str:
     for k, label in TABS:
         on = ' class="on"' if k == active else ""
         badge = f'<span class="badge" title="合成待ちのフォルダ">{n}</span>' if k == "stitch" and n else ""
+        if k == "capture" and cc.Session.active:
+            badge = '<span class="badge" title="撮影モード中">●</span>'
         links += f'<a href="/{k}?t={token}"{on}>{label}{badge}</a>'
     return (f'<style>{NAV_CSS}</style>{cs.LOGO_SVG}<span class="name">culture-<b>tools</b></span>'
             f'<nav class="nav">{links}</nav>'
@@ -289,6 +293,14 @@ def serve() -> None:
                     return self._json({"app": APP})
                 if parts == ["folders"]:
                     return self._html(unify(cf.render_page(cf.scan(ROOT), token, brand("folders", token)), "フォルダ作成"))
+                if parts == ["capture"]:
+                    return self._html(cc.render_page(ROOT, cf.scan(ROOT), token, brand("capture", token), cs.FAVICON))
+                if parts == ["capture", "status"]:
+                    return self._json(cc.Session.status())
+                if len(parts) == 3 and parts[:2] == ["capture", "thumb"]:
+                    from urllib.parse import unquote
+                    data = cc.thumb(unquote(parts[2]))
+                    return self._send(200, data, "image/jpeg", cache=True) if data else self._send(404, b"", "text/plain")
                 if parts == ["stitch"]:
                     return self._html(stitch_page(token))
                 if parts == ["stitch", "status"]:
@@ -348,6 +360,26 @@ def serve() -> None:
                     import os
                     if sys.platform == "win32":
                         os.startfile(p)                       # noqa: S606
+                return self._json({})
+            if path == "/capture/inbox":                     # 取り込み元フォルダを選ぶ
+                p = cc.pick_folder()
+                if p is None:
+                    return self._json({})
+                if ROOT.resolve() == p.resolve() or ROOT.resolve() in p.resolve().parents:
+                    return self._json({"error": "写真のフォルダ（00_Culture_Media）の外のフォルダを選んでください"})
+                cc.save_inbox(p)
+                return self._json({})
+            if path == "/capture/start":
+                return self._json({"error": cc.start(ROOT, cf.scan(ROOT), body.get("keys", []))})
+            if path == "/capture/next":
+                cc.Session.next()
+                pending(fresh=True)
+                return self._json({})
+            if path == "/capture/undo":
+                return self._json({"error": cc.Session.undo()})
+            if path == "/capture/end":
+                cc.Session.stop("撮影モードを途中で中断しました")
+                pending(fresh=True)
                 return self._json({})
             if path == "/stitch/run":
                 with lock:

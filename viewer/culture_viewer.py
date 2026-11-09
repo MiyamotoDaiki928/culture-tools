@@ -217,6 +217,22 @@ select{background:#1f1f23;color:var(--ink);border:1px solid var(--line);border-r
 #warns li{margin:4px 0}
 #done{display:none;position:fixed;inset:0;background:var(--bg);align-items:center;justify-content:center;
   font-size:15px;z-index:50}
+/* 画面の幅が狭いとき（画面の半分で開いたときなど）は、文字が重ならないよう段を分ける */
+.seg button,.btn{white-space:nowrap}
+#ctrl{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
+@media (max-width:1280px){
+  #ctrl{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"a b" "m m";row-gap:4px}
+  #cA{grid-area:a} #cB{grid-area:b} #mid{grid-area:m} #hint{display:none}
+}
+@media (max-width:1000px){
+  header.top{height:auto;min-height:52px;flex-wrap:wrap;row-gap:6px;padding:8px 16px}
+  .tools{flex-wrap:wrap}
+}
+@media (max-width:760px){
+  #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "b" "m"}
+  #cB{justify-content:flex-start}
+  #popB{left:0;right:auto}
+}
 """
 
 JS = r"""

@@ -6,3 +6,6 @@ app/app_state.json
 stitch/review/
 __pycache__/
 *.pyc
+
+# 紹介スライド（実際の培地写真を含むため、公開しない）
+slides/
