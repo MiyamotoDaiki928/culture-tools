@@ -208,6 +208,11 @@ select{background:#1f1f23;color:var(--ink);border:1px solid var(--line);border-r
 #divider::after{content:'';position:absolute;top:50%;left:-7px;width:12px;height:36px;border-radius:6px;
   background:var(--accent);transform:translateY(-50%)}
 #stage.ov #divider{display:block}
+/* 1 枚：A だけを画面いっぱいに表示する */
+#stage.one #vB{display:none}
+.seg button:disabled,.tools .btn:disabled{opacity:.35;cursor:default}
+body.one #cB,body.one #mid{display:none}
+body.one #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a"}
 #hint{color:var(--quiet);font-size:11px;margin-top:2px}
 .busy{color:var(--accent2);font-size:12px;visibility:hidden;white-space:nowrap}
 .busy.on{visibility:visible}
@@ -415,26 +420,32 @@ function step(p, dir) {
 function setMode(m) {
   mode = m;
   $('stage').classList.toggle('ov', m === 'ov');
+  $('stage').classList.toggle('one', m === 'one');
+  document.body.classList.toggle('one', m === 'one');
   $('mSide').classList.toggle('on', m === 'side');
   $('mOv').classList.toggle('on', m === 'ov');
-  $('sync').disabled = m === 'ov';
-  if (m === 'ov') Object.assign(V.B, V.A);
+  $('mOne').classList.toggle('on', m === 'one');
+  $('sync').disabled = m !== 'side';
+  $('swap').disabled = m === 'one';
+  if (m === 'ov' || (m === 'side' && sync)) Object.assign(V.B, V.A);   // 1 枚で拡大した位置を、並べたときにも引き継ぐ
   requestAnimationFrame(() => { render('A'); render('B'); });
 }
 
 function init() {
-  // 最初は、いちばん新しい撮影日の画像（A）と、同じサンプルの 1 つ前の日（B）を並べる
+  // 最初は、いちばん新しい撮影日の画像と、同じサンプルの 1 つ前の日を並べる。古いほうを左（A）、新しいほうを右（B）にする
   const a = E.reduce((b, e, i) => (e.date > E[b].date ? i : b), 0);
   const ids = S[sidx[E[a].sample]].ids, k = ids.indexOf(a);
   let b = ids[k - 1] ?? ids[k + 1];
   if (b == null) b = E.findIndex((e, i) => i !== a && e.date === E[a].date);
   if (b < 0 || b == null) b = E.findIndex((e, i) => i !== a);
   if (b < 0) b = a;
-  P.A.id = a; P.B.id = b;
-  setEntry('A', a); setEntry('B', b);
+  const [left, right] = E[b].date <= E[a].date ? [b, a] : [a, b];
+  P.A.id = left; P.B.id = right;
+  setEntry('A', left); setEntry('B', right);
   bind('A'); bind('B');
   $('mSide').onclick = () => setMode('side');
   $('mOv').onclick = () => setMode('ov');
+  $('mOne').onclick = () => setMode('one');
   $('sync').onclick = () => { sync = !sync; $('sync').classList.toggle('on', sync); if (sync) changed('A'); };
   $('swap').onclick = () => { const a = P.A.id, b = P.B.id; setEntry('A', b); setEntry('B', a); };
   $('fit').onclick = () => { for (const p of ['A', 'B']) Object.assign(V[p], {cx: .5, cy: .5, z: 1}); render('A'); render('B'); };
@@ -455,7 +466,9 @@ function init() {
   $('stage').addEventListener('pointerdown', closePops);
   addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { $('popA').classList.remove('open'); $('popB').classList.remove('open'); return; }
-    if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { step(ev.shiftKey ? 'A' : 'B', ev.key === 'ArrowRight' ? 1 : -1); ev.preventDefault(); }
+    if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
+      step(mode === 'one' || ev.shiftKey ? 'A' : 'B', ev.key === 'ArrowRight' ? 1 : -1); ev.preventDefault();   // 1 枚のときは、表示中の写真の日付を送る
+    }
   });
   const post = path => fetch(path, {method: 'POST', headers: {'X-Token': T}}).catch(() => {});
   post('/ping'); const beat = setInterval(() => post('/ping'), 5000);
@@ -475,7 +488,7 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
     data = data.replace("</", "<\\/")
     warn_btn = (f'<button class="btn warn" id="warnBtn">注意 {len(warns)} 件</button>' if warns else "")
     tools = ('<div class="tools">'
-             '<div class="seg"><button id="mSide" class="on">並べる</button><button id="mOv">重ねる</button></div>'
+             '<div class="seg"><button id="mSide" class="on">並べる</button><button id="mOv">重ねる</button><button id="mOne" title="1 枚だけを大きく表示する（←→ で日付を送る）">1枚</button></div>'
              '<div class="seg"><button id="sync" class="on" title="片方を拡大・移動すると、もう片方も同じ位置に動く">拡大を連動</button></div>'
              '<button class="btn" id="fit" title="ダブルクリックでも全体表示に戻る">全体表示</button>'
              '<button class="btn" id="swap">左右を入れ替え</button>'
