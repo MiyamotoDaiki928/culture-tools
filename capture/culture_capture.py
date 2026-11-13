@@ -392,7 +392,7 @@ async function poll() {
   let s; try { s = await (await fetch('/capture/status?t=' + T)).json(); } catch (e) { return; }
   if (!s.active) { location.reload(); return; }
   const cur = s.queue[s.idx], n = cur.count, need = s.need;
-  $('cur').textContent = `${cur.label}（DIV${cur.div}）`;
+  $('cur').textContent = `${cur.label}（DIV${cur.div}・${+cur.seed.slice(5, 7)}/${+cur.seed.slice(8, 10)} 播種）`;
   $('cnt').textContent = `${n} / ${need} 枚` + (s.extras.length ? `　＋ 追加 ${s.extras.length} 枚` : '');
   $('cnt').classList.toggle('full', n === need); $('cnt').classList.toggle('over', n > need);
   const ids = s.idx + ':' + s.shots.join(',') + '|' + s.extras.join(',');
@@ -409,7 +409,7 @@ async function poll() {
   $('undo').disabled = !s.undo;
   // 最後の MEA-Probe を撮り終えたら「撮影を完了する」だけにする（中断は、撮り終える前にやめるときのもの）
   $('end').style.display = (s.idx + 1 >= s.queue.length && n === need) ? 'none' : '';
-  $('q').innerHTML = s.queue.map((x, i) => `<li class="${i === s.idx ? 'cur' : i < s.idx ? 'done' : ''}">${x.label}（DIV${x.div}）　${x.count} 枚</li>`).join('');
+  $('q').innerHTML = s.queue.map((x, i) => `<li class="${i === s.idx ? 'cur' : i < s.idx ? 'done' : ''}">${x.label}（DIV${x.div}・${+x.seed.slice(5, 7)}/${+x.seed.slice(8, 10)} 播種）　${x.count} 枚</li>`).join('');
   $('notes').textContent = s.notes.join('\n');
   setTimeout(poll, 1000);
 }
