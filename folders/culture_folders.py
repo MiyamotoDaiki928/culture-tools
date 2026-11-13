@@ -286,7 +286,7 @@ def render_page(seeds: list[dict], token: str, brand: str | None = None) -> str:
             f'<div class="list" id="list"></div><button class="more" id="more"></button>'
             f'<h2>新しく播種したMEA-Probe</h2>'
             f'<div class="new"><span>播種日 <button class="date" id="seedDate" data-value="{today}"></button></span>'
-            f'<span>Probe 番号 <input type="text" id="probes" size="12" placeholder="例：5　複数なら 5, 6"></span>'
+            f'<span>Probe 番号 <input type="text" id="probes" size="12" placeholder="例：5 または 5, 6"></span>'
             f'<span class="hint" id="newHint"></span></div>'
             f'<div id="res"></div></main><div id="bar"><button id="go"></button></div>'
             f'<div id="cal"></div><div id="done">終了しました。このタブは閉じて構いません。</div>'
