@@ -208,11 +208,19 @@ select{background:#1f1f23;color:var(--ink);border:1px solid var(--line);border-r
 #divider::after{content:'';position:absolute;top:50%;left:-7px;width:12px;height:36px;border-radius:6px;
   background:var(--accent);transform:translateY(-50%)}
 #stage.ov #divider{display:block}
-/* 1 枚：A だけを画面いっぱいに表示する */
-#stage.one #vB{display:none}
+/* 1 枚：A か B の片方だけを画面いっぱいに表示する */
+#stage.one-A #vB,#stage.one-B #vA{display:none}
 .seg button:disabled,.tools .btn:disabled{opacity:.35;cursor:default}
-body.one #cB,body.one #mid{display:none}
-body.one #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a"}
+body.one-A #cB,body.one-B #cA,body.one #mid{display:none}
+body.one #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "b"}
+body.one-B #cB{justify-content:flex-start}
+.pc .btn.one{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;margin-left:6px;padding:6px 14px;
+  background:#1f1f23;border:1px solid rgba(255,255,255,.14);border-radius:8px;font-weight:600;cursor:pointer}
+.pc .btn.one::before{content:'';width:14px;height:14px;background:currentColor;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4v4M6 14H2v-4M14 2 9.5 6.5M2 14l4.5-4.5'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4v4M6 14H2v-4M14 2 9.5 6.5M2 14l4.5-4.5'/%3E%3C/svg%3E") center/contain no-repeat}
+.pc .btn.one.on::before{-webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 7H9V3M3 9h4v4M9 7l5-5M7 9l-5 5'/%3E%3C/svg%3E");mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 7H9V3M3 9h4v4M9 7l5-5M7 9l-5 5'/%3E%3C/svg%3E")}
+.pc .btn.one:hover{border-color:rgba(255,255,255,.3);background:#26262b}
+.pc .btn.one.on{background:rgba(245,158,11,.2);border-color:var(--accent);color:var(--ink)}
 #hint{color:var(--quiet);font-size:11px;margin-top:2px}
 .busy{color:var(--accent2);font-size:12px;visibility:hidden;white-space:nowrap}
 .busy.on{visibility:visible}
@@ -225,6 +233,7 @@ body.one #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a"}
 /* 画面の幅が狭いとき（画面の半分で開いたときなど）は、文字が重ならないよう段を分ける */
 .seg button,.btn{white-space:nowrap}
 #ctrl{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
+@media (max-width:1600px){#hint{display:none}}
 @media (max-width:1280px){
   #ctrl{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"a b" "m m";row-gap:4px}
   #cA{grid-area:a} #cB{grid-area:b} #mid{grid-area:m} #hint{display:none}
@@ -233,7 +242,7 @@ body.one #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a"}
   header.top{height:auto;min-height:52px;flex-wrap:wrap;row-gap:6px;padding:8px 16px}
   .tools{flex-wrap:wrap}
 }
-@media (max-width:760px){
+@media (max-width:1100px){
   #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "b" "m"}
   #cB{justify-content:flex-start}
   #popB{left:0;right:auto}
@@ -249,7 +258,7 @@ const $ = id => document.getElementById(id);
 const other = p => p === 'A' ? 'B' : 'A';
 const P = {A: {id: null}, B: {id: null}};
 const V = {A: {cx: .5, cy: .5, z: 1}, B: {cx: .5, cy: .5, z: 1}};
-let sync = true, mode = 'side';
+let sync = true, mode = 'side', one = null, last = 'side';   // one：1 枚で表示中の側（A / B）。last：1 枚にする前の表示
 
 const ymd = iso => iso.replaceAll('-', '/');
 const url = (id, q) => `/img/${id}?q=${q}&t=${T}`;
@@ -417,17 +426,27 @@ function step(p, dir) {
   if (j != null) setEntry(p, j);
 }
 
-function setMode(m) {
-  mode = m;
+function setMode(m, side) {
+  const from = one;
+  if (m === 'one' && mode !== 'one') last = mode;
+  mode = m; one = m === 'one' ? side : null;
+  for (const el of [$('stage'), document.body]) {
+    el.classList.toggle('one', m === 'one');
+    el.classList.toggle('one-A', one === 'A');
+    el.classList.toggle('one-B', one === 'B');
+  }
   $('stage').classList.toggle('ov', m === 'ov');
-  $('stage').classList.toggle('one', m === 'one');
-  document.body.classList.toggle('one', m === 'one');
   $('mSide').classList.toggle('on', m === 'side');
   $('mOv').classList.toggle('on', m === 'ov');
-  $('mOne').classList.toggle('on', m === 'one');
+  for (const p of ['A', 'B']) {
+    $('one' + p).classList.toggle('on', one === p);
+    $('one' + p).textContent = one === p ? '2枚に戻す' : '1枚で表示';
+  }
   $('sync').disabled = m !== 'side';
   $('swap').disabled = m === 'one';
-  if (m === 'ov' || (m === 'side' && sync)) Object.assign(V.B, V.A);   // 1 枚で拡大した位置を、並べたときにも引き継ぐ
+  // 1 枚で拡大した位置を、2 枚に戻したときにも引き継ぐ
+  if (from && m !== 'one' && (m === 'ov' || sync)) Object.assign(V[other(from)], V[from]);
+  else if (m === 'ov') Object.assign(V.B, V.A);
   requestAnimationFrame(() => { render('A'); render('B'); });
 }
 
@@ -445,7 +464,7 @@ function init() {
   bind('A'); bind('B');
   $('mSide').onclick = () => setMode('side');
   $('mOv').onclick = () => setMode('ov');
-  $('mOne').onclick = () => setMode('one');
+  for (const p of ['A', 'B']) $('one' + p).onclick = () => one === p ? setMode(last) : setMode('one', p);
   $('sync').onclick = () => { sync = !sync; $('sync').classList.toggle('on', sync); if (sync) changed('A'); };
   $('swap').onclick = () => { const a = P.A.id, b = P.B.id; setEntry('A', b); setEntry('B', a); };
   $('fit').onclick = () => { for (const p of ['A', 'B']) Object.assign(V[p], {cx: .5, cy: .5, z: 1}); render('A'); render('B'); };
@@ -467,7 +486,7 @@ function init() {
   addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { $('popA').classList.remove('open'); $('popB').classList.remove('open'); return; }
     if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
-      step(mode === 'one' || ev.shiftKey ? 'A' : 'B', ev.key === 'ArrowRight' ? 1 : -1); ev.preventDefault();   // 1 枚のときは、表示中の写真の日付を送る
+      step(mode === 'one' ? one : ev.shiftKey ? 'A' : 'B', ev.key === 'ArrowRight' ? 1 : -1); ev.preventDefault();   // 1 枚のときは、表示中の写真の日付を送る
     }
   });
   const post = path => fetch(path, {method: 'POST', headers: {'X-Token': T}}).catch(() => {});
@@ -488,7 +507,7 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
     data = data.replace("</", "<\\/")
     warn_btn = (f'<button class="btn warn" id="warnBtn">注意 {len(warns)} 件</button>' if warns else "")
     tools = ('<div class="tools">'
-             '<div class="seg"><button id="mSide" class="on">並べる</button><button id="mOv">重ねる</button><button id="mOne" title="1 枚だけを大きく表示する（←→ で日付を送る）">1枚</button></div>'
+             '<div class="seg"><button id="mSide" class="on">並べる</button><button id="mOv">重ねる</button></div>'
              '<div class="seg"><button id="sync" class="on" title="片方を拡大・移動すると、もう片方も同じ位置に動く">拡大を連動</button></div>'
              '<button class="btn" id="fit" title="ダブルクリックでも全体表示に戻る">全体表示</button>'
              '<button class="btn" id="swap">左右を入れ替え</button>'
@@ -499,7 +518,8 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
     panel = lambda p: (f'<div class="pc" id="c{p}"><span class="tag">{p}</span>'
                        f'<button class="btn" id="prev{p}" title="前の日">◀</button>'
                        f'<button class="pick" id="pick{p}" title="MEA-Probe と日付を選ぶ"></button>'
-                       f'<button class="btn" id="next{p}" title="次の日">▶</button><span class="busy" id="busy{p}">読み込み中…</span>'
+                       f'<button class="btn" id="next{p}" title="次の日">▶</button>'
+                       f'<button class="btn one" id="one{p}" title="この写真だけを大きく表示する（←→ で日付を送る）">1枚で表示</button><span class="busy" id="busy{p}">読み込み中…</span>'
                        f'<div class="pop" id="pop{p}"></div></div>')
     vp = lambda p: f'<div class="vp" id="v{p}"><img id="i{p}" alt=""></div>'
     warn_list = "".join(f"<li>{html.escape(w)}</li>" for w in warns)
