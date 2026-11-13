@@ -5,7 +5,7 @@
 
 ブラウザで画面を開き、次の 2 つをボタン 1 つで作る。
   ・今日撮影するMEA-Probe の DIV フォルダ（YYMMDD播種(番号)\\DIVn。n は播種日からの日数で自動計算）
-  ・新しく播種したMEA-Probe のフォルダ（YYMMDD播種(番号)\\DIV0）
+  ・新しく播種したMEA-Probe のフォルダ（YYMMDD播種(番号)\\DIV0。同じ日に複数播種したときは、番号ごとに別のフォルダ）
 既にあるフォルダは作り直さず、ファイルの移動や削除は一切しない。
 """
 from __future__ import annotations
@@ -219,11 +219,15 @@ function render() {
   const older = Math.max(0, seeds.length - D.recent);
   $('more').style.display = older ? '' : 'none';
   $('more').textContent = showAll ? '最近のMEA-Probe だけ表示' : `以前のMEA-Probe も表示（${older} 件）`;
-  const probes = /^\d+$/.test($('probes').value) && +$('probes').value > 0 ? [+$('probes').value] : [];
+  const probes = parseProbes();
   const sd = $('seedDate').dataset.value, yymmdd = sd.slice(2, 4) + sd.slice(5, 7) + sd.slice(8, 10);
+  const have = new Set(seeds.map(s => s.key));
   $('newHint').innerHTML = probes.length
-    ? `作成するフォルダ：<code>${yymmdd}播種(${probes[0]})\\DIV0</code>`
-    : 'Probe 番号を入れると、作成するフォルダ名がここに表示されます';
+    ? '作成するフォルダ：' + probes.map(n => {
+        const k = `${yymmdd}播種(${n})`;
+        return `<code>${k}\\DIV0</code>` + (have.has(k) ? '（既にあります）' : '');
+      }).join('　')
+    : 'Probe 番号を入れると、作成するフォルダ名がここに表示されます。同じ日に複数播種したときは「5, 6」のように区切って入れます';
   for (const id of ['shoot', 'seedDate']) $(id).innerHTML = `${dayLabel($(id).dataset.value)}<span class="caret">▾</span>`;
   const n = picked.size + probes.length;
   $('go').disabled = n === 0;
@@ -234,11 +238,19 @@ $('list').addEventListener('change', ev => {
   const k = ev.target.dataset.key;
   if (k) { ev.target.checked ? picked.add(k) : picked.delete(k); render(); }
 });
-$('probes').addEventListener('input', () => { $('probes').value = $('probes').value.replace(/\D/g, ''); render(); });
+// 同じ日に複数の MEA-Probe を播種したときは「5, 6」「5 6」「5、6」のように区切って入れる（1 つずつ別のフォルダになる）
+function parseProbes() {
+  const out = [];
+  for (const t of $('probes').value.split(/[,、，\s]+/)) {
+    if (/^\d{1,3}$/.test(t) && +t > 0 && !out.includes(+t)) out.push(+t);
+  }
+  return out;
+}
+$('probes').addEventListener('input', () => { $('probes').value = $('probes').value.replace(/[^\d,、，\s]/g, ''); render(); });
 $('more').onclick = () => { showAll = !showAll; render(); };
 
 $('go').onclick = async () => {
-  const probes = /^\d+$/.test($('probes').value) && +$('probes').value > 0 ? [+$('probes').value] : [];
+  const probes = parseProbes();
   const res = await post('/create', {shoot: $('shoot').dataset.value, keys: [...picked],
                                       new: probes.length ? {date: $('seedDate').dataset.value, probes} : null});
   seeds = res.seeds; picked.clear(); $('probes').value = '';
@@ -274,7 +286,7 @@ def render_page(seeds: list[dict], token: str, brand: str | None = None) -> str:
             f'<div class="list" id="list"></div><button class="more" id="more"></button>'
             f'<h2>新しく播種したMEA-Probe</h2>'
             f'<div class="new"><span>播種日 <button class="date" id="seedDate" data-value="{today}"></button></span>'
-            f'<span>Probe 番号 <input type="text" id="probes" size="6" inputmode="numeric" maxlength="3" placeholder="例：5"></span>'
+            f'<span>Probe 番号 <input type="text" id="probes" size="12" placeholder="例：5　複数なら 5, 6"></span>'
             f'<span class="hint" id="newHint"></span></div>'
             f'<div id="res"></div></main><div id="bar"><button id="go"></button></div>'
             f'<div id="cal"></div><div id="done">終了しました。このタブは閉じて構いません。</div>'
