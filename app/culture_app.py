@@ -218,7 +218,7 @@ def stitch_page(token: str) -> str:
             'border-radius:8px;padding:6px 14px;font:inherit;cursor:pointer}.btn-line:hover{border-color:rgba(255,255,255,.3)}'
             f'</style><body data-token="{token}" data-running="{1 if Job.running else 0}">'
             f'<header class="top">{brand("stitch", token)}</header><main><h1>合成</h1>'
-            '<p>合成前の写真（IMG_数字.JPG が 6 枚）が入った DIV フォルダを 00_Culture_Media の中から探し、まとめて合成します。'
+            '<p>合成前の写真（IMG_数字.JPG が 6 枚）が入った DIV フォルダを写真のフォルダの中から探し、まとめて合成します。'
             '合成が終わると、この画面に結果が表示されます。</p>'
             f'{body}</main><div id="bar"><button id="run"{"" if ready else " disabled"}>{label}</button>'
             '<div id="prog-wrap"><div id="prog"></div></div><span id="msg"></span></div>'
@@ -366,7 +366,7 @@ def serve() -> None:
                 if p is None:
                     return self._json({})
                 if ROOT.resolve() == p.resolve() or ROOT.resolve() in p.resolve().parents:
-                    return self._json({"error": "写真のフォルダ（00_Culture_Media）の外のフォルダを選んでください"})
+                    return self._json({"error": "写真のフォルダの外のフォルダを選んでください"})
                 cc.save_inbox(p)
                 return self._json({})
             if path == "/capture/start":
@@ -478,7 +478,7 @@ def ask(msg: str) -> bool:
 
 
 def choose_root(prev: Path | None) -> Path | None:
-    """写真のフォルダ（00_Culture_Media）を選んでもらい、app\\config.json に覚える"""
+    """写真のフォルダ（YYMMDD播種(番号) のフォルダを入れる場所）を選んでもらい、app\\config.json に覚える"""
     if prev is not None and not ask(
             f"写真のフォルダが見つかりません。\n{prev}\n\n"
             "Google ドライブなど、フォルダのある場所が使える状態か確認してください。\n\n"
@@ -491,7 +491,7 @@ def choose_root(prev: Path | None) -> Path | None:
     w.attributes("-topmost", True)
     while True:
         picked = filedialog.askdirectory(parent=w, mustexist=True,
-                                         title="写真のフォルダ（00_Culture_Media など）を選んでください")
+                                         title="写真のフォルダ（YYMMDD播種(番号) のフォルダを入れる場所）を選んでください")
         if not picked:
             w.destroy()
             return None

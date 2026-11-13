@@ -503,7 +503,7 @@ def start(root: Path, scan: list[dict], keys: list[str]) -> str:
     if inbox is None or not inbox.is_dir():
         return "取り込み元フォルダを選んでください"
     if root.resolve() == inbox.resolve() or root.resolve() in inbox.resolve().parents:
-        return "取り込み元フォルダには、写真のフォルダ（00_Culture_Media）の外のフォルダを選んでください"
+        return "取り込み元フォルダには、写真のフォルダの外のフォルダを選んでください"
     by_key = {t["key"]: t for t in today_targets(root, scan)}
     queue = [by_key[k] for k in keys if k in by_key]
     if not queue:

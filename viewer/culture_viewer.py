@@ -1,10 +1,10 @@
-"""MEA-Probe 合成画像の見比べツール（culture-viewer）
+"""MEA-Probe 合成画像の見比べ（culture-tools の「見比べ」画面）
 
 使い方:
-    python culture_viewer.py [フォルダ]    フォルダ省略時は 00_Culture_Media を読む
+    python culture_viewer.py [フォルダ]    フォルダ省略時は、初回に選んだ写真のフォルダを読む
 
-00_Culture_Media の「YYMMDD播種(番号)\\DIVn\\YYMMDD_番号.jpg」を集め、2 枚を左右に並べて
-（または重ねて）見比べる画面をブラウザで開く。画像は読むだけで、vault 内のファイルは変更しない。
+写真のフォルダの「YYMMDD播種(番号)\\DIVn\\YYMMDD_番号.jpg」を集め、2 枚を左右に並べて
+（または重ねて）見比べる画面をブラウザで開く。画像は読むだけで、写真のフォルダ内のファイルは変更しない。
 画面を閉じるか「終了」を押すと、このツールも終了する。
 """
 from __future__ import annotations
@@ -47,7 +47,7 @@ def scan(root: Path) -> tuple[list[dict], list[str]]:
     for seed_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         m = SEED_RE.match(seed_dir.name)
         if not m:
-            continue                       # 旧形式（Probe が 2 つのフォルダ）などは対象外
+            continue                       # 名前の規則と違うフォルダは対象外
         seed = dt.datetime.strptime(m.group(1), "%y%m%d").date()
         probe = int(m.group(2))
         for div_dir in sorted(p for p in seed_dir.iterdir() if p.is_dir()):
@@ -124,7 +124,7 @@ def medium_image(i: int, e: dict) -> bytes:
 
 # ---------------------------------------------------------------- 画面
 
-# culture-viewer のロゴ（culture-stitcher のロゴの色を反転したもの。デスクトップのアイコンと同じ図案）
+# 単体で起動したときのロゴ（culture-tools のロゴの色を反転したもの）
 LOGO = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none'>"
         "<circle cx='16' cy='16' r='15' fill='#f59e0b'/>"
         + "".join(f"<circle cx='{x}' cy='{y}' r='2' fill='#111113'/>"
@@ -523,7 +523,7 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
                        f'<div class="pop" id="pop{p}"></div></div>')
     vp = lambda p: f'<div class="vp" id="v{p}"><img id="i{p}" alt=""></div>'
     warn_list = "".join(f"<li>{html.escape(w)}</li>" for w in warns)
-    return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>見比べ | culture-viewer</title>'
+    return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>見比べ | culture-tools</title>'
             f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}</style><body>'
             f'{header}<div id="warns"><ul>{warn_list}</ul></div>'
             f'<div id="ctrl">{panel("A")}<div id="mid"><div id="rel"></div><div id="hint">ホイール・ピンチで拡大　ドラッグで移動　ダブルクリックで全体　←→ で B の日付を送る（Shift で A）</div></div>{panel("B")}</div>'

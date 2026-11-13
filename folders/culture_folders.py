@@ -1,7 +1,7 @@
-"""撮影前のフォルダ作成ツール（culture-folders）
+"""撮影前のフォルダ作成（culture-tools の「フォルダ作成」画面）
 
 使い方:
-    python culture_folders.py [フォルダ]    フォルダ省略時は 00_Culture_Media を使う
+    python culture_folders.py [フォルダ]    フォルダ省略時は、初回に選んだ写真のフォルダを使う
 
 ブラウザで画面を開き、次の 2 つをボタン 1 つで作る。
   ・今日撮影するMEA-Probe の DIV フォルダ（YYMMDD播種(番号)\\DIVn。n は播種日からの日数で自動計算）
@@ -34,7 +34,7 @@ RECENT_COUNT = 6      # 新しく播種した順に、この件数を最初か�
 SEED_RE = re.compile(r"^(\d{6})播種\((\d+)\)$")
 DIV_RE = re.compile(r"^DIV(\d+)$", re.IGNORECASE)
 
-# culture-folders のロゴ（culture-stitcher と同じ円に、フォルダを足す「＋」）
+# 単体で起動したときのロゴ（culture-tools と同じ円に、フォルダを足す「＋」）
 LOGO = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none'>"
         "<circle cx='16' cy='16' r='14' fill='#111113'/>"
         "<circle cx='16' cy='16' r='14' fill='#f59e0b' fill-opacity='.14' stroke='#f59e0b' stroke-width='2.2'/>"
@@ -48,7 +48,7 @@ def scan(root: Path) -> list[dict]:
     for d in root.iterdir():
         m = SEED_RE.match(d.name) if d.is_dir() else None
         if not m:
-            continue                                   # 旧形式（Probe が 2 つのフォルダ）などは対象外
+            continue                                   # 名前の規則と違うフォルダは対象外
         divs = sorted(int(x.group(1)) for x in (DIV_RE.match(c.name) for c in d.iterdir() if c.is_dir()) if x)
         seed = dt.datetime.strptime(m.group(1), "%y%m%d").date()
         seeds.append({"key": d.name, "seed": seed.isoformat(), "probe": int(m.group(2)), "divs": divs})
@@ -277,7 +277,7 @@ def render_page(seeds: list[dict], token: str, brand: str | None = None) -> str:
     today = dt.date.today().isoformat()
     data = json.dumps({"token": token, "today": today, "recent": RECENT_COUNT, "seeds": seeds}, ensure_ascii=False)
     data = data.replace("</", "<\\/")
-    return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>フォルダ作成 | culture-folders</title>'
+    return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>フォルダ作成 | culture-tools</title>'
             f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}</style><body>'
             f'<header class="top">{brand}'
             f'<div class="tools"><button class="btn" id="quit">終了</button></div></header><main>'
@@ -336,7 +336,7 @@ def serve(root: Path, open_browser: bool) -> None:
                 return self._json({"results": results, "seeds": scan(root)})
             if path == "/open":
                 p = Path(body.get("path", ""))
-                # 00_Culture_Media の中のフォルダだけをエクスプローラーで開く
+                # 写真のフォルダの中のフォルダだけをエクスプローラーで開く
                 if p.is_dir() and root.resolve() in p.resolve().parents:
                     if sys.platform == "win32":
                         os.startfile(p)                 # noqa: S606

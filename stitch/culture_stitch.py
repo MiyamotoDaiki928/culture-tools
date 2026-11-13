@@ -1,7 +1,7 @@
 """MEA-Probe 培地写真の合成ツール
 
 使い方:
-    python culture_stitch.py stitch [フォルダ ...]   合成（フォルダ省略時は 00_Culture_Media 全体を走査）
+    python culture_stitch.py stitch [フォルダ ...]   合成（フォルダ省略時は、初回に選んだ写真のフォルダ全体を走査）
     python culture_stitch.py cleanup                 直前の合成で処理したフォルダの元画像をごみ箱へ移動
 
 合成のあとは確認ページを自分のパソコン内だけで配信し、ページのボタンから元画像を削除できる。
@@ -40,7 +40,7 @@ RAW_PATTERN = re.compile(r"^IMG_\d+\.jpe?g$", re.IGNORECASE)
 
 
 def load_root() -> Path | None:
-    """初回起動時に選んだ写真のフォルダ（00_Culture_Media）を読む。まだ選んでいなければ None"""
+    """初回起動時に選んだ写真のフォルダを読む。まだ選んでいなければ None"""
     try:
         p = json.loads(CONFIG.read_text(encoding="utf-8")).get("root")
     except (OSError, ValueError, AttributeError):
@@ -66,29 +66,21 @@ class FolderInfo:
 def parse_folder(folder: Path, raw_files: list[Path]) -> FolderInfo:
     """フォルダ名から Probe 番号・播種日・DIV（Days In Vitro: 播種後経過日数）を読み取る。
 
-    想定する構成:
-      261028播種(6)/DIV7              … 現行
-      260617播種(5, 6)/day7/5         … 旧形式（Probe ごとのサブフォルダ）
+    想定する構成: 261028播種(6)/DIV7（1 つの播種フォルダに Probe 番号は 1 つ）
     """
     probe = seed = div = None
     parts = folder.parts
     for i, name in enumerate(parts):
-        m = re.match(r"^(\d{6})播種\(([\d,\s]+)\)$", name)
+        m = re.match(r"^(\d{6})播種\((\d+)\)$", name)
         if not m:
             continue
         seed = dt.datetime.strptime(m.group(1), "%y%m%d").date()
-        probes = [int(x) for x in re.findall(r"\d+", m.group(2))]
+        probe = int(m.group(2))
         rest = parts[i + 1:]
         if rest:
-            d = re.match(r"^(?:DIV|day)(\d+)$", rest[0], re.IGNORECASE)
+            d = re.match(r"^DIV(\d+)$", rest[0], re.IGNORECASE)
             if d:
                 div = int(d.group(1))
-        if len(probes) == 1:
-            probe = probes[0]
-        else:
-            for name2 in rest[1:]:
-                if name2.isdigit() and int(name2) in probes:
-                    probe = int(name2)
         break
     return FolderInfo(folder, raw_files, probe, seed, div)
 
@@ -446,7 +438,7 @@ def render_page(results: list[Result], token: str | None = None, brand: str | No
         note = ("緑の円は検出した電極の位置です。画像をクリックすると原寸の合成画像を開きます。"
                 "このページは記録用です。元画像の削除は、culture-tools の「合成」画面から行えます。")
         bar = script = ""
-    return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>合成結果の確認 | culture-stitcher</title>'
+    return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>合成結果の確認 | culture-tools</title>'
             f'<link rel="icon" type="image/svg+xml" href="{FAVICON}">'
             f'<style>{PAGE_CSS}</style><body data-token="{token or ""}">'
             f'{header}<main>'
@@ -649,7 +641,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="MEA-Probe 培地写真の合成ツール")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("stitch", help="合成する")
-    s.add_argument("folders", nargs="*", help="対象フォルダ（省略時は 00_Culture_Media 全体）")
+    s.add_argument("folders", nargs="*", help="対象フォルダ（省略時は、初回に選んだ写真のフォルダ全体）")
     s.add_argument("--force", action="store_true", help="既存の合成画像を上書きする")
     s.add_argument("--no-open", action="store_true", help="確認ページを自動で開かない")
     s.add_argument("--no-serve", action="store_true", help="削除ボタン付きのページを配信せず、記録用ページだけ作る")
