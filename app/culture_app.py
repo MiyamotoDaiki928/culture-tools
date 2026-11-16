@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import html
 import json
 import re
 import secrets
@@ -118,6 +119,10 @@ def run_stitch() -> None:
                 Job.done += 1
             print(f"  [{r.status}] {info.path} " + " / ".join(r.messages))
             results.append(r)
+        # 前回の合成で元画像を消さずに残したフォルダは、今回は「対象外（合成済み）」になる。
+        # 撮り直したフォルダだけを合成し直したときにも、それらの元画像を結果の画面から削除できるよう前回の記録を引き継ぐ
+        prev = {r.folder: r for r in last_results() if cs.deletable(r)}
+        results = [prev[r.folder] if r.status == "skip" and r.folder in prev else r for r in results]
         results.sort(key=lambda r: cs.ORDER.index(r.status))
         if any(r.status in ("ok", "warn") for r in results):
             cs.save_manifest(results)
@@ -178,6 +183,59 @@ document.getElementById('again').onclick = async () => {
 };
 """
 
+# 「撮り直す」：元画像と合成画像をごみ箱へ移し、画面下のボタンからそのまま撮影モードを始められるようにする
+RETAKE_JS = r"""
+(() => {
+  const go = document.getElementById('retake-go'), msg = document.getElementById('msg');
+  const show = (targets) => {
+    go.dataset.keys = JSON.stringify(targets.map(t => t.key));
+    go.textContent = `撮り直しの撮影を始める（${targets.map(t => 'MEA-Probe ' + t.probe).join('、')}）`;
+    go.style.display = targets.length ? '' : 'none';
+  };
+  document.querySelectorAll('button.redo').forEach(b => b.onclick = async () => {
+    const sec = b.closest('section');
+    const what = b.dataset.out === '1' ? '元画像と合成画像' : '元画像';
+    if (!confirm(`${sec.querySelector('h2').textContent}\n\nこのフォルダの${what}をごみ箱へ移して、撮り直せるようにします。よろしいですか？`)) return;
+    b.disabled = true; msg.textContent = '移動中...';
+    try {
+      const r = await (await fetch('/stitch/retake', {method: 'POST', headers: {'X-Token': token, 'Content-Type': 'application/json'},
+                                                     body: JSON.stringify({id: Number(b.dataset.id)})})).json();
+      const p = document.createElement('p');
+      if (r.errors.length) {
+        p.className = 'fail'; b.disabled = false;
+        p.textContent = `${r.moved} 個を移動、${r.errors.length} 個は移動できませんでした: ${r.errors.join(' / ')}`;
+      } else {
+        p.className = 'done';
+        p.textContent = r.today ? `${r.moved} 個のファイルをごみ箱へ移しました。画面下の「撮り直しの撮影を始める」から撮影できます`
+                                : `${r.moved} 個のファイルをごみ箱へ移しました。今日の DIV フォルダではないため撮影モードは使えません。このフォルダに直接 6 枚を入れてください`;
+        sec.className = 'retake'; sec.querySelector('.st').textContent = '撮り直し';
+        const box = sec.querySelector('input.pick'); if (box) { box.checked = false; box.disabled = true; box.parentElement.remove(); }
+        b.remove(); refresh();
+      }
+      sec.insertBefore(p, sec.querySelector('ul').nextSibling);
+      show(r.targets); msg.textContent = '';
+    } catch (e) { msg.textContent = 'エラー: ' + e.message; b.disabled = false; }
+  });
+  go.onclick = async () => {
+    const r = await (await fetch('/capture/start', {method: 'POST', headers: {'X-Token': token, 'Content-Type': 'application/json'},
+                                                   body: JSON.stringify({keys: JSON.parse(go.dataset.keys || '[]')})})).json();
+    if (r.error) alert(r.error);
+    location.href = '/capture?t=' + token;
+  };
+})();
+"""
+
+
+def retake_targets() -> list[dict]:
+    """「撮り直す」を押したフォルダのうち、今日の DIV フォルダで撮影モードを使えるもの（撮る順は結果の画面の並び順）"""
+    today = {Path(t["path"]): t for t in cc.today_targets(ROOT, cf.scan(ROOT))}
+    out: list[dict] = []
+    for r in Job.results or []:
+        t = today.get(Path(r.folder))
+        if r.status == "retake" and t and all(o["key"] != t["key"] for o in out):
+            out.append({"key": t["key"], "probe": t["probe"]})
+    return out
+
 
 def last_results() -> list:
     """前回の合成の記録のうち、元画像がまだ残っていて削除できるもの"""
@@ -190,9 +248,15 @@ def last_results() -> list:
 
 def stitch_page(token: str) -> str:
     if Job.results is not None and not Job.running:
+        targets = retake_targets()
+        keys = json.dumps([t["key"] for t in targets], ensure_ascii=False)
+        names = "、".join(f"MEA-Probe {t['probe']}" for t in targets)
+        hide = "" if targets else ' style="display:none"'
+        go = (f'<button id="retake-go" data-keys="{html.escape(keys)}"{hide}>'
+              f'撮り直しの撮影を始める（{names}）</button>')
         page = cs.render_page(Job.results, token, brand=brand("stitch", token),
-                              extra_bar='<button class="sub" id="again">合成待ちを確認し直す</button>', extra_js=AGAIN_JS,
-                              folder_label=lambda f: rel(Path(f)))
+                              extra_bar=go + '<button class="sub" id="again">合成待ちを確認し直す</button>',
+                              extra_js=AGAIN_JS + RETAKE_JS, folder_label=lambda f: rel(Path(f)), retake=True)
         return unify(page, "合成結果の確認")
     ready, odd = pending(fresh=not Job.running)
     rows = "".join(f'<li>{rel(i.path)}</li>' for i in ready)
@@ -370,7 +434,10 @@ def serve() -> None:
                 cc.save_inbox(p)
                 return self._json({})
             if path == "/capture/start":
-                return self._json({"error": cc.start(ROOT, cf.scan(ROOT), body.get("keys", []))})
+                err = cc.start(ROOT, cf.scan(ROOT), body.get("keys", []))
+                if not err and not Job.running:
+                    Job.results = None          # 撮影を始めたら、前回の合成結果の画面は閉じる（撮影後に「合成」を開くと合成待ちが出る）
+                return self._json({"error": err})
             if path == "/capture/next":
                 cc.Session.next()
                 pending(fresh=True)
@@ -391,6 +458,24 @@ def serve() -> None:
                 if not Job.running:
                     Job.results = None
                 return self._json({})
+            if path == "/stitch/retake":                     # 合成結果の確認ページの「撮り直す」
+                res = Job.results or []
+                i = body.get("id")
+                if Job.running or not (isinstance(i, int) and 0 <= i < len(res)) or not cs.retakable(res[i]):
+                    return self._json({"moved": 0, "errors": ["撮り直しの対象にできません"], "today": False,
+                                       "targets": retake_targets()})
+                with lock:
+                    r = res[i]
+                    moved, errors = cs.trash_for_retake(r)
+                    print(f"  撮り直しのため {moved} 個をごみ箱へ移動: {r.folder}")
+                    if not errors:
+                        r.status = "retake"
+                        r.messages.append("撮り直しのため、元画像と合成画像をごみ箱へ移しました")
+                    cs.save_manifest(res)
+                pending(fresh=True)
+                targets = retake_targets()
+                today = any(Path(t["path"]) == Path(r.folder) for t in cc.today_targets(ROOT, cf.scan(ROOT)))
+                return self._json({"moved": moved, "errors": errors, "today": today, "targets": targets})
             if path == "/stitch/last":
                 if not Job.running:
                     Job.results = last_results() or None

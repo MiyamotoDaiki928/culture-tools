@@ -294,8 +294,8 @@ def process(info: FolderInfo, force: bool) -> Result:
     return res
 
 
-LABELS = {"ok": "正常", "warn": "要確認", "error": "失敗", "skip": "対象外", "deleted": "削除済み"}
-ORDER = ["error", "warn", "ok", "skip", "deleted"]
+LABELS = {"ok": "正常", "warn": "要確認", "error": "失敗", "skip": "対象外", "retake": "撮り直し", "deleted": "削除済み"}
+ORDER = ["error", "warn", "ok", "skip", "retake", "deleted"]
 
 PAGE_CSS = """
 :root{--bg:#18181b;--panel:#111113;--card:#1f1f23;--line:rgba(255,255,255,.08);--ink:#fafafa;--quiet:#a1a1aa;
@@ -307,10 +307,12 @@ main>p{color:var(--quiet);font-size:13px;line-height:1.7}
 section{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--quiet);border-radius:10px;
   margin:0 0 16px;padding:12px 16px}
 section.ok{border-left-color:var(--good)} section.warn{border-left-color:var(--warn)} section.error{border-left-color:var(--bad)}
-section.skip,section.deleted{opacity:.55}
+section.skip,section.deleted,section.retake{opacity:.55}
 h2{font-size:14px;font-weight:600;margin:0 0 4px;word-break:break-all} h2 span.st{display:inline-block;min-width:5em;font-weight:700}
 section.ok .st{color:var(--good)} section.warn .st{color:var(--warn)} section.error .st{color:var(--bad)}
-section.skip .st,section.deleted .st{color:var(--quiet)}
+section.skip .st,section.deleted .st,section.retake .st{color:var(--quiet)}
+button.redo{display:block;margin:0 0 8px;background:transparent;color:var(--ink);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 14px;font:inherit;cursor:pointer} button.redo:hover{border-color:rgba(255,255,255,.3)}
+#retake-go{background:var(--accent);color:#111113;border:0;font-weight:600}
 .out{margin:0;font-weight:600} ul{margin:4px 0 8px;font-size:13px;color:var(--quiet);padding-left:20px}
 img{display:block;width:450px;max-width:100%;border:1px solid var(--line);border-radius:6px}
 label.pick{display:block;margin:4px 0 8px;font-size:14px;cursor:pointer}
@@ -357,6 +359,7 @@ del.addEventListener('click', async () => {
       p.className = r.errors.length ? 'fail' : 'done';
       p.textContent = r.errors.length ? `${r.moved} 枚を移動、${r.errors.length} 枚は移動できませんでした: ${r.errors.join(' / ')}` : `元画像 ${r.moved} 枚をごみ箱へ移動しました`;
       sec.insertBefore(p, box.parentElement.nextSibling);
+      const rb = sec.querySelector('button.redo'); if (rb && !r.errors.length) rb.remove();
     }
     msg.textContent = '完了しました。';
   } catch(e) { msg.textContent = 'エラー: ' + e.message; }
@@ -405,16 +408,32 @@ def deletable(r: Result) -> bool:
             and any(Path(f).exists() for f in r.raw_files))
 
 
+def retakable(r: Result) -> bool:
+    """撮り直せる（元画像か合成画像が残っていて、ごみ箱へ移して撮影からやり直せる）"""
+    return (r.status in ("ok", "warn", "error")
+            and (any(Path(f).exists() for f in r.raw_files) or bool(r.output and Path(r.output).exists())))
+
+
+def _ver(p) -> int:
+    """ファイルの更新時刻。画像のアドレスに付けて、作り直した画像をブラウザが古い画像と取り違えないようにする"""
+    try:
+        return Path(p).stat().st_mtime_ns
+    except (OSError, TypeError):
+        return 0
+
+
 def render_page(results: list[Result], token: str | None = None, brand: str | None = None,
-                extra_bar: str = "", extra_js: str = "", folder_label=None) -> str:
-    """確認ページ。token ありはアプリの実行中に配信する削除ボタン付き、なしは保存用。"""
+                extra_bar: str = "", extra_js: str = "", folder_label=None, retake: bool = False) -> str:
+    """確認ページ。token ありはアプリの実行中に配信する削除ボタン付き、なしは保存用。
+    retake=True のときは、フォルダごとに「撮り直す」ボタンを付ける（culture-tools の画面から使う）。"""
     live = token is not None
     header = f'<header class="top">{brand}</header>' if brand else HEADER
     rows = []
     for i, r in enumerate(results):
         if r.preview and r.output:
-            src = f"/preview/{i}?t={token}" if live else r.preview
-            href = f"/full/{i}?t={token}" if live else Path(r.output).as_uri()
+            # 番号だけのアドレスだと、撮り直して作り直した画像でもブラウザが前回の画像を表示してしまうため、更新時刻を付ける
+            src = f"/preview/{i}?t={token}&v={_ver(REVIEW_DIR / r.preview)}" if live else r.preview
+            href = f"/full/{i}?t={token}&v={_ver(r.output)}" if live else Path(r.output).as_uri()
             img = f'<a href="{html.escape(href)}" target="_blank"><img src="{html.escape(src)}"></a>'
         else:
             img = ""
@@ -425,6 +444,10 @@ def render_page(results: list[Result], token: str | None = None, brand: str | No
             checked = " checked" if r.status == "ok" else ""
             pick = (f'<label class="pick"><input type="checkbox" class="pick" value="{i}"{checked}>'
                     f'問題なし（元画像を削除してよい）</label>')
+        if live and retake and retakable(r):
+            has_out = bool(r.output and Path(r.output).exists())
+            pick += (f'<button class="redo" data-id="{i}" data-out="{int(has_out)}">撮り直す（元画像'
+                     f'{"と合成画像" if has_out else ""}をごみ箱へ移す）</button>')
         rows.append(f'<section id="r{i}" class="{r.status}"><h2><span class="st">{LABELS[r.status]}</span>'
                     f'{html.escape(folder_label(r.folder) if folder_label else r.folder)}</h2><p class="out">{out}</p><ul>{msgs}</ul>{pick}{img}</section>')
     if live:
@@ -449,6 +472,31 @@ def render_page(results: list[Result], token: str | None = None, brand: str | No
 def save_manifest(results: list[Result]) -> None:
     REVIEW_DIR.mkdir(exist_ok=True)
     MANIFEST.write_text(json.dumps([asdict(r) for r in results], ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def trash_for_retake(r: Result) -> tuple[int, list[str]]:
+    """撮り直しのため、元画像（同時に保存された RAW なども）と合成画像をごみ箱へ移す"""
+    from send2trash import send2trash
+    files: list[Path] = []
+    for f in r.raw_files:
+        p = Path(f)
+        files.append(p)
+        try:
+            files += [q for q in p.parent.iterdir() if q.is_file() and q.stem == p.stem and q != p]
+        except OSError:
+            pass
+    if r.output:
+        files.append(Path(r.output))
+    moved, errors = 0, []
+    for p in files:
+        if not p.exists():
+            continue
+        try:
+            send2trash(str(p))
+            moved += 1
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{p.name}（{e}）")
+    return moved, errors
 
 
 def trash_raw_files(r: Result) -> tuple[int, list[str]]:

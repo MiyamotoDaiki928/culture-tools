@@ -261,7 +261,7 @@ const V = {A: {cx: .5, cy: .5, z: 1}, B: {cx: .5, cy: .5, z: 1}};
 let sync = true, mode = 'side', one = null, last = 'side';   // one：1 枚で表示中の側（A / B）。last：1 枚にする前の表示
 
 const ymd = iso => iso.replaceAll('-', '/');
-const url = (id, q) => `/img/${id}?q=${q}&t=${T}`;
+const url = (id, q) => `/img/${id}?q=${q}&v=${E[id].mtime}&t=${T}`;   // 更新時刻を付け、作り直した画像を古い画像と取り違えない
 
 const md = iso => `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}`;
 const dish = e => `MEA-Probe ${e.probe}`;
@@ -502,7 +502,7 @@ init();
 
 def render_page(entries: list[dict], samples: list[dict], warns: list[str], token: str,
                 brand: str | None = None) -> str:
-    pub = [{k: e[k] for k in ("sample", "sampleLabel", "probe", "seed", "div", "date", "name")} for e in entries]
+    pub = [{k: e[k] for k in ("sample", "sampleLabel", "probe", "seed", "div", "date", "name", "mtime")} for e in entries]
     data = json.dumps({"token": token, "entries": pub, "samples": samples}, ensure_ascii=False)
     data = data.replace("</", "<\\/")
     warn_btn = (f'<button class="btn warn" id="warnBtn">注意 {len(warns)} 件</button>' if warns else "")
