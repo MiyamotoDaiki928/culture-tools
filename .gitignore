@@ -11,3 +11,4 @@ __pycache__/
 slides/
 
 app/probes.json
+viewer/scale_cache.json

@@ -4,7 +4,8 @@
     python culture_viewer.py [フォルダ]    フォルダ省略時は、初回に選んだ写真のフォルダを読む
 
 写真のフォルダの「YYMMDD播種(番号)\\DIVn\\YYMMDD_番号.jpg」を集め、2 枚を左右に並べて
-（または重ねて）見比べる画面をブラウザで開く。画像は読むだけで、写真のフォルダ内のファイルは変更しない。
+（または重ねて）見比べる画面をブラウザで開く。画像を表示する枠の下に黒い帯を常に表示し、その右端にスケールバー
+（縦横に隣り合う電極の中心間距離：545電極は 450 µm、515電極は 150 µm）を、いまの拡大率に合わせた長さで表示する。画像は読むだけで、写真のフォルダ内のファイルは変更しない。
 画面を閉じるか「終了」を押すと、このツールも終了する。
 """
 from __future__ import annotations
@@ -25,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import numpy as np
 from PIL import Image, ImageOps
 
 import sys
@@ -33,6 +35,7 @@ sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "stitch"))   # 合
 import culture_stitch as cs
 
 MEDIUM = 2400                              # 通常表示に使う縮小画像の長辺。これより拡大すると原寸を読む
+SCALE_CACHE = Path(__file__).resolve().parent / "scale_cache.json"   # 画像ごとに求めた電極間距離の記録（2 回目から速くする）
 
 SEED_RE = re.compile(r"^(\d{6})播種\((\d+)\)$")
 DIV_RE = re.compile(r"^DIV(\d+)$", re.IGNORECASE)
@@ -44,12 +47,14 @@ LOOKS_LIKE = re.compile(r"^\d+_\d+\.jpe?g$", re.IGNORECASE)   # 合成画像ら�
 
 def scan(root: Path) -> tuple[list[dict], list[str]]:
     entries, warns = [], []
+    types = cs.load_types()
     for seed_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         m = SEED_RE.match(seed_dir.name)
         if not m:
             continue                       # 名前の規則と違うフォルダは対象外
         seed = dt.datetime.strptime(m.group(1), "%y%m%d").date()
         probe = int(m.group(2))
+        kind = cs.type_of(seed_dir.name, types)
         for div_dir in sorted(p for p in seed_dir.iterdir() if p.is_dir()):
             d = DIV_RE.match(div_dir.name)
             if not d:
@@ -76,7 +81,7 @@ def scan(root: Path) -> tuple[list[dict], list[str]]:
                 entries.append({
                     "sample": f"{seed:%y%m%d}_{probe}",
                     "sampleLabel": f"{seed:%y%m%d}播種({probe})",
-                    "seed": seed.isoformat(), "probe": probe, "div": div,
+                    "seed": seed.isoformat(), "probe": probe, "div": div, "type": kind,
                     "date": date.isoformat(), "name": f.name,
                     "path": str(f), "mtime": st.st_mtime, "size": st.st_size,
                 })
@@ -121,6 +126,64 @@ def medium_image(i: int, e: dict) -> bytes:
                 im.save(buf, "JPEG", quality=88)
             _cache[i] = buf.getvalue()
         return _cache[i]
+
+# ---------------------------------------------------------------- スケールバー
+
+# 合成画像によって 1 µm あたりの画素数が違う（以前 image-stitcher で作った画像は縮尺も切り出し方も異なる）ため、
+# 画像の幅から決めず、画像ごとに電極を検出して電極間距離を求める。求めた値は SCALE_CACHE に残す。
+_scale_lock = threading.Lock()
+
+
+def _load_scale_cache() -> dict:
+    try:
+        d = json.loads(SCALE_CACHE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_scale_cache: dict = _load_scale_cache()
+
+
+def measure_pitch(path: Path) -> float | None:
+    """画像の幅に対する電極間距離の割合。電極を検出できなければ None"""
+    img = cs.imread(path)
+    h, w = img.shape[:2]
+    try:
+        lat = cs.fit_lattice(cs.detect_electrodes(img, 2576))
+        la, lb = float(np.linalg.norm(lat.a)), float(np.linalg.norm(lat.b))
+        if lat.found >= 40 and lat.rms < 0.05 and abs(la - lb) / max(la, lb) < 0.03:
+            return (la + lb) / 2 / w
+    except RuntimeError:
+        pass
+    # このツールで作った合成画像は、一辺が電極間距離の (GRID - 1 + 2 * MARGIN_PITCH) 倍の正方形
+    if abs(h - w) <= 2:
+        return 1 / (cs.GRID - 1 + 2 * cs.MARGIN_PITCH)
+    return None
+
+
+def scale_info(e: dict) -> dict:
+    """スケールバーの長さ（画像の幅に対する割合）と、その長さが表す距離（µm）"""
+    key = e["path"]
+    stamp = [e["mtime"], e["size"]]
+    with _scale_lock:
+        c = _scale_cache.get(key)
+    if not (c and c.get("stamp") == stamp):
+        try:
+            ratio = measure_pitch(Path(e["path"]))
+        except Exception as ex:                    # noqa: BLE001
+            print(f"  スケールバーの長さを求められませんでした: {e['path']}（{ex}）")
+            ratio = None
+        c = {"stamp": stamp, "ratio": ratio}
+        with _scale_lock:
+            _scale_cache[key] = c
+            try:
+                SCALE_CACHE.write_text(json.dumps(_scale_cache, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
+    kind = e.get("type", cs.DEFAULT_TYPE)
+    return {"ratio": c["ratio"], "um": cs.PITCH_UM.get(kind, cs.PITCH_UM[cs.DEFAULT_TYPE]), "type": kind}
+
 
 # ---------------------------------------------------------------- 画面
 
@@ -199,9 +262,16 @@ select{background:#1f1f23;color:var(--ink);border:1px solid var(--line);border-r
 .vp{position:relative;flex:1;overflow:hidden;cursor:grab;touch-action:none}
 .vp.drag{cursor:grabbing}
 .vp img{position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;-webkit-user-drag:none}
+/* 画像の枠（.vp）の下に、スケールバー用の黒い帯を常に表示する。拡大・移動しても帯は動かない */
+.pane{position:relative;flex:1;display:flex;flex-direction:column;min-width:0}
+.strip{flex:none;height:46px;background:#000;position:relative}
+.sb{position:absolute;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;
+  gap:5px;color:#fff;white-space:nowrap;font-family:"Segoe UI","Yu Gothic UI",sans-serif;font-weight:600;font-size:14px;line-height:1}
+.sb i{display:block;height:5px;background:#fff}
+.sb.none{color:#71717a;font-weight:400;font-size:12px}
 #stage.ov{gap:0}
-#stage.ov .vp{position:absolute;inset:0}
-#stage.ov #vB{clip-path:inset(0 0 0 var(--split))}
+#stage.ov .pane{position:absolute;inset:0}
+#stage.ov #pB{clip-path:inset(0 0 0 var(--split))}
 #divider{display:none;position:absolute;top:0;bottom:0;left:var(--split);width:0;border-left:2px solid var(--accent);
   z-index:5;cursor:ew-resize}
 #divider::before{content:'';position:absolute;top:0;bottom:0;left:-12px;width:24px}
@@ -209,7 +279,7 @@ select{background:#1f1f23;color:var(--ink);border:1px solid var(--line);border-r
   background:var(--accent);transform:translateY(-50%)}
 #stage.ov #divider{display:block}
 /* 1 枚：A か B の片方だけを画面いっぱいに表示する */
-#stage.one-A #vB,#stage.one-B #vA{display:none}
+#stage.one-A #pB,#stage.one-B #pA{display:none}
 .seg button:disabled,.tools .btn:disabled{opacity:.35;cursor:default}
 body.one-A #cB,body.one-B #cA,body.one #mid{display:none}
 body.one #ctrl{grid-template-columns:minmax(0,1fr);grid-template-areas:"a" "b"}
@@ -257,6 +327,14 @@ const sidx = Object.fromEntries(S.map((s, i) => [s.key, i]));
 const $ = id => document.getElementById(id);
 const other = p => p === 'A' ? 'B' : 'A';
 const P = {A: {id: null}, B: {id: null}};
+// スケールバー：電極の中心間距離（545 は 450 µm、515 は 150 µm）の長さで描く。
+// 拡大してバーが帯の幅の MAX_BAR を超えるときだけ、収まる短い長さ（NICE のうち最大のもの）に切り替える
+const MAX_BAR = 0.4, NICE = [100, 50, 20, 10, 5, 2, 1];
+const scales = {};                                  // 画像ごとのスケールバーの長さ（サーバーで電極から求める）
+function getScale(id) {
+  if (!scales[id]) scales[id] = fetch(`/scale/${id}?t=${T}`).then(r => r.json()).catch(() => ({ratio: null}));
+  return scales[id];
+}
 const V = {A: {cx: .5, cy: .5, z: 1}, B: {cx: .5, cy: .5, z: 1}};
 let sync = true, mode = 'side', one = null, last = 'side';   // one：1 枚で表示中の側（A / B）。last：1 枚にする前の表示
 
@@ -305,7 +383,9 @@ function setEntry(p, id) {
   updateUI();
   load(p, 'm');
   const ids = S[sidx[E[id].sample]].ids, k = ids.indexOf(id);
-  for (const j of [ids[k - 1], ids[k + 1]]) if (j != null) new Image().src = url(j, 'm');   // 前後を先読み
+  for (const j of [ids[k - 1], ids[k + 1]]) if (j != null) { new Image().src = url(j, 'm'); getScale(j); }   // 前後を先読み
+  P[p].scale = undefined;
+  getScale(id).then(s => { if (P[p].id === id) { P[p].scale = s; render(p); } });
 }
 
 function load(p, q) {
@@ -336,6 +416,23 @@ function render(p) {
   img.style.width = pp.iw + 'px';
   img.style.height = pp.ih + 'px';
   img.style.transform = `translate(${g.tx}px,${g.ty}px) scale(${g.s})`;
+  // スケールバー：画面上の 1 µm の長さ ＝ 画像の幅に対する電極間距離の割合 × 表示中の画像の幅 ÷ 電極間距離（µm）
+  const sb = $('s' + p), sc = pp.scale;
+  // バーの右端を画像の右端に合わせる。拡大して画像の右端が枠の外に出たときは、枠の右端に合わせる。
+  // 重ねるときの A は、A が見える左側に出すため、バーの左端を画像の左端（または枠の左端）に合わせる
+  const left = Math.max(0, g.tx), right = Math.max(0, g.vw - (g.tx + pp.iw * g.s));
+  if (mode === 'ov' && p === 'A') { sb.style.left = left + 'px'; sb.style.right = 'auto'; }
+  else { sb.style.right = right + 'px'; sb.style.left = 'auto'; }
+  if (sc && sc.ratio) {
+    const perUm = sc.ratio * pp.iw * g.s / sc.um, limit = g.vw * MAX_BAR;
+    let um = sc.um;
+    if (um * perUm > limit) um = NICE.find(n => n < sc.um && n * perUm <= limit) || NICE.at(-1);
+    sb.className = 'sb';
+    sb.innerHTML = `<i style="width:${um * perUm}px"></i><span>${um} µm</span>`;
+  } else {
+    sb.className = 'sb none';
+    sb.innerHTML = sc === undefined ? '' : '電極を検出できないため、スケールバーを表示できません';
+  }
   if (!pp.full && !pp.wantFull && g.s > 1.05) { pp.wantFull = true; load(p, 'f'); }   // 拡大したら原寸を読む
 }
 
@@ -502,7 +599,7 @@ init();
 
 def render_page(entries: list[dict], samples: list[dict], warns: list[str], token: str,
                 brand: str | None = None) -> str:
-    pub = [{k: e[k] for k in ("sample", "sampleLabel", "probe", "seed", "div", "date", "name", "mtime")} for e in entries]
+    pub = [{k: e[k] for k in ("sample", "sampleLabel", "probe", "seed", "div", "date", "name", "mtime", "type")} for e in entries]
     data = json.dumps({"token": token, "entries": pub, "samples": samples}, ensure_ascii=False)
     data = data.replace("</", "<\\/")
     warn_btn = (f'<button class="btn warn" id="warnBtn">注意 {len(warns)} 件</button>' if warns else "")
@@ -521,7 +618,8 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
                        f'<button class="btn" id="next{p}" title="次の日">▶</button>'
                        f'<button class="btn one" id="one{p}" title="この写真だけを大きく表示する（←→ で日付を送る）">1枚で表示</button><span class="busy" id="busy{p}">読み込み中…</span>'
                        f'<div class="pop" id="pop{p}"></div></div>')
-    vp = lambda p: f'<div class="vp" id="v{p}"><img id="i{p}" alt=""></div>'
+    vp = lambda p: (f'<div class="pane" id="p{p}"><div class="vp" id="v{p}"><img id="i{p}" alt=""></div>'
+                    f'<div class="strip"><div class="sb" id="s{p}"></div></div></div>')
     warn_list = "".join(f"<li>{html.escape(w)}</li>" for w in warns)
     return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>見比べ | culture-tools</title>'
             f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}</style><body>'
@@ -572,6 +670,9 @@ def serve(entries: list[dict], samples: list[dict], warns: list[str], open_brows
             parts = u.path.strip("/").split("/")
             if parts == [""]:
                 return self._send(200, page, "text/html; charset=utf-8")
+            if len(parts) == 2 and parts[0] == "scale" and parts[1].isdigit() and int(parts[1]) < len(entries):
+                body = json.dumps(scale_info(entries[int(parts[1])])).encode("utf-8")
+                return self._send(200, body, "application/json")
             if len(parts) == 2 and parts[0] == "img" and parts[1].isdigit() and int(parts[1]) < len(entries):
                 e = entries[int(parts[1])]
                 q = parse_qs(u.query).get("q", ["m"])[0]

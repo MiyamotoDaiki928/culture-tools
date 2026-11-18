@@ -381,6 +381,8 @@ def serve() -> None:
                                                            brand("viewer", token)), "見比べ"))
                 if len(parts) == 2 and parts[1].isdigit():
                     i = int(parts[1])
+                    if parts[0] == "scale" and i < len(viewer["entries"]):   # 見比べのスケールバーの長さ
+                        return self._json(cv.scale_info(viewer["entries"][i]))
                     if parts[0] == "img" and i < len(viewer["entries"]):     # 見比べの画像
                         e = viewer["entries"][i]
                         if parse_qs(u.query).get("q", ["m"])[0] == "f":
