@@ -3,7 +3,7 @@
 使い方:
     python culture_viewer.py [フォルダ]    フォルダ省略時は、初回に選んだ写真のフォルダを読む
 
-写真のフォルダの「YYMMDD播種(番号)\\DIVn\\YYMMDD_番号.jpg」を集め、2 枚を左右に並べて
+写真のフォルダの「YYMMDD播種(Probe 番号)\\DIVn\\YYMMDD_番号.jpg」（以前の形 YYMMDD播種(番号) も読む）を集め、2 枚を左右に並べて
 （または重ねて）見比べる画面をブラウザで開く。画像を表示する枠の下に黒い帯を常に表示し、その右端にスケールバー
 （縦横に隣り合う電極の中心間距離：545電極は 450 µm、515電極は 150 µm）を、いまの拡大率に合わせた長さで表示する。画像は読むだけで、写真のフォルダ内のファイルは変更しない。
 画面を閉じるか「終了」を押すと、このツールも終了する。
@@ -37,7 +37,7 @@ import culture_stitch as cs
 MEDIUM = 2400                              # 通常表示に使う縮小画像の長辺。これより拡大すると原寸を読む
 SCALE_CACHE = Path(__file__).resolve().parent / "scale_cache.json"   # 画像ごとに求めた電極間距離の記録（2 回目から速くする）
 
-SEED_RE = re.compile(r"^(\d{6})播種\((\d+)\)$")
+SEED_RE = cs.SEED_RE     # 播種フォルダの名前（新しい形 YYMMDD播種(Probe N) と、以前の形 YYMMDD播種(N)）
 DIV_RE = re.compile(r"^DIV(\d+)$", re.IGNORECASE)
 IMG_RE = re.compile(r"^(\d{6})_(\d+)\.jpe?g$", re.IGNORECASE)
 LOOKS_LIKE = re.compile(r"^\d+_\d+\.jpe?g$", re.IGNORECASE)   # 合成画像らしいが名前の形式が違うもの
@@ -80,7 +80,7 @@ def scan(root: Path) -> tuple[list[dict], list[str]]:
                 st = f.stat()
                 entries.append({
                     "sample": f"{seed:%y%m%d}_{probe}",
-                    "sampleLabel": f"{seed:%y%m%d}播種({probe})",
+                    "sampleLabel": cs.seed_name(seed, probe),
                     "seed": seed.isoformat(), "probe": probe, "div": div, "type": kind,
                     "date": date.isoformat(), "name": f.name,
                     "path": str(f), "mtime": st.st_mtime, "size": st.st_size,
@@ -246,7 +246,7 @@ def _explain(rel: Path) -> dict:
         if not parts:
             why.append("写真のフォルダの直下にある（播種ごとのフォルダに入っていない）")
         else:
-            why.append(f"いちばん上のフォルダ名「{top}」が「YYMMDD播種(番号)」の形でない")
+            why.append(f"いちばん上のフォルダ名「{top}」が「YYMMDD播種(Probe 番号)」の形でない")
             s = SEEDISH_RE.match(top)
             if s:
                 try:
@@ -303,7 +303,7 @@ def _explain(rel: Path) -> dict:
             why.append(f"ファイル名の日付が、播種日＋DIV（{seed + dt.timedelta(days=div):%y%m%d}）と合わない")
     suggest = None
     if seed and div is not None and probe is not None:
-        suggest = f"{seed:%y%m%d}播種({probe})\\DIV{div}\\{seed + dt.timedelta(days=div):%y%m%d}_{probe}.jpg"
+        suggest = f"{cs.seed_name(seed, probe)}\\DIV{div}\\{seed + dt.timedelta(days=div):%y%m%d}_{probe}.jpg"
     missing = [w for w, ok in (("播種日", seed), ("DIV（播種からの日数）", div is not None), ("Probe 番号", probe is not None)) if not ok]
     return {"path": str(rel).replace("/", "\\"), "why": why or ["表示される形と違う"], "suggest": suggest,
             "unknown": missing}
@@ -331,7 +331,7 @@ def render_missing(info: dict) -> str:
            '<p>見比べに表示されるのは、写真のフォルダの中で、次の形に置いた合成画像だけです。'
            '播種日・Probe番号・播種からの日数（DIV：Days In Vitro）・撮影日を、フォルダ名とファイル名から読み取ります。</p>',
            '<pre>（写真のフォルダ）\n'
-           '  └ 261028播種(6)         … 播種日(YYMMDD)播種(Probe番号)。1 つのフォルダに Probe 番号は 1 つ\n'
+           '  └ 261028播種(Probe 6)   … 播種日(YYMMDD)播種(Probe 番号)。1 つのフォルダに Probe 番号は 1 つ\n'
            '      ├ DIV0              … 播種当日を 0 とした日数\n'
            '      │  └ 261028_6.jpg   … 撮影日(YYMMDD)_Probe番号.jpg（JPEG）\n'
            '      └ DIV7\n'
@@ -934,7 +934,7 @@ def main() -> None:
         print(f"  注意: {w}")
     if not entries:
         print("見比べられる合成画像が見つかりませんでした。見比べに出すには、合成画像を次の形に置いてください。")
-        print("  （写真のフォルダ）\\YYMMDD播種(Probe番号)\\DIV数字\\YYMMDD_Probe番号.jpg　例：261028播種(6)\\DIV7\\261104_6.jpg")
+        print("  （写真のフォルダ）\\YYMMDD播種(Probe 番号)\\DIV数字\\YYMMDD_番号.jpg　例：261028播種(Probe 6)\\DIV7\\261104_6.jpg")
         for it in diagnose(root, entries)["items"][:50]:
             print(f"  表示されない画像: {it['path']}　→ {it['suggest'] or '（場所と名前を決められません）'}　理由: {' / '.join(it['why'])}")
         sys.exit(3)

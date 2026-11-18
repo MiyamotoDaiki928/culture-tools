@@ -358,7 +358,7 @@ def serve() -> None:
                 if parts == ["alive"]:
                     return self._json({"app": APP})
                 if parts == ["folders"]:
-                    return self._html(unify(cf.render_page(cf.scan(ROOT), token, brand("folders", token)), "フォルダ作成"))
+                    return self._html(unify(cf.render_page(cf.scan(ROOT), token, brand("folders", token), ROOT), "フォルダ作成"))
                 if parts == ["capture"]:
                     return self._html(cc.render_page(ROOT, cf.scan(ROOT), token, brand("capture", token), cs.FAVICON))
                 if parts == ["capture", "status"]:
@@ -422,6 +422,10 @@ def serve() -> None:
                 return self._json({})
             if path == "/quit":
                 return self._json({})                   # 「終了」ボタンはなくしたので何もしない
+            if path == "/rename":                             # 以前の形の播種フォルダ名を新しい形に変える
+                r = cf.rename_old(ROOT)
+                pending(fresh=True)
+                return self._json(r)
             if path == "/create":                             # フォルダ作成
                 results = cf.create(ROOT, body)
                 pending(fresh=True)
@@ -571,7 +575,7 @@ def ask(msg: str) -> bool:
 
 
 def choose_root(prev: Path | None) -> Path | None:
-    """写真のフォルダ（YYMMDD播種(番号) のフォルダを入れる場所）を選んでもらい、app\\config.json に覚える"""
+    """写真のフォルダ（YYMMDD播種(Probe 番号) のフォルダを入れる場所）を選んでもらい、app\\config.json に覚える"""
     if prev is not None and not ask(
             f"写真のフォルダが見つかりません。\n{prev}\n\n"
             "Google ドライブなど、フォルダのある場所が使える状態か確認してください。\n\n"
@@ -584,13 +588,13 @@ def choose_root(prev: Path | None) -> Path | None:
     w.attributes("-topmost", True)
     while True:
         picked = filedialog.askdirectory(parent=w, mustexist=True,
-                                         title="写真のフォルダ（YYMMDD播種(番号) のフォルダを入れる場所）を選んでください")
+                                         title="写真のフォルダ（YYMMDD播種(Probe 番号) のフォルダを入れる場所）を選んでください")
         if not picked:
             w.destroy()
             return None
         root = Path(picked)
         seeded = any(d.is_dir() and re.match(r"^\d{6}播種", d.name) for d in root.iterdir())
-        if seeded or ask(f"{root}\n\nこのフォルダには「YYMMDD播種(番号)」の形のフォルダがありません。"
+        if seeded or ask(f"{root}\n\nこのフォルダには「YYMMDD播種(Probe 番号)」の形のフォルダがありません。"
                          "このフォルダを写真のフォルダとして使いますか？"):
             break
     w.destroy()
