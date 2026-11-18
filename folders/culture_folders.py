@@ -6,6 +6,8 @@
 ブラウザで画面を開き、次の 2 つをボタン 1 つで作る。
   ・今日撮影するMEA-Probe の DIV フォルダ（YYMMDD播種(番号)\\DIVn。n は播種日からの日数で自動計算）
   ・新しく播種したMEA-Probe のフォルダ（YYMMDD播種(番号)\\DIV0。同じ日に複数播種したときは、番号ごとに別のフォルダ）
+新しく播種したMEA-Probe は 1 つずつ Probe 番号と電極の種類（545 / 515）を入れる。種類は app\\probes.json に記録し、
+撮影（撮る枚数）と合成（合成するかどうか）で使う。
 既にあるフォルダは作り直さず、ファイルの移動や削除は一切しない。
 """
 from __future__ import annotations
@@ -45,13 +47,15 @@ FAVICON = "data:image/svg+xml," + LOGO.replace("#", "%23")
 
 def scan(root: Path) -> list[dict]:
     seeds = []
+    types = cs.load_types()
     for d in root.iterdir():
         m = SEED_RE.match(d.name) if d.is_dir() else None
         if not m:
             continue                                   # 名前の規則と違うフォルダは対象外
         divs = sorted(int(x.group(1)) for x in (DIV_RE.match(c.name) for c in d.iterdir() if c.is_dir()) if x)
         seed = dt.datetime.strptime(m.group(1), "%y%m%d").date()
-        seeds.append({"key": d.name, "seed": seed.isoformat(), "probe": int(m.group(2)), "divs": divs})
+        seeds.append({"key": d.name, "seed": seed.isoformat(), "probe": int(m.group(2)), "divs": divs,
+                      "type": cs.type_of(d.name, types)})
     return sorted(seeds, key=lambda s: (s["seed"], -s["probe"]), reverse=True)   # 新しい播種から、同じ日は番号の小さい順
 
 
@@ -72,11 +76,27 @@ def create(root: Path, body: dict) -> list[dict]:
     new = body.get("new") or {}
     if new.get("probes"):
         date = dt.date.fromisoformat(new["date"])
-        for n in new["probes"]:
-            if not (isinstance(n, int) and 0 < n < 1000):
+        types = cs.load_types()
+        done: set[int] = set()
+        for item in new["probes"]:
+            # {"n": 番号, "type": "545" / "515"}。以前の形（番号だけ）も受け付け、そのときは 545 とする
+            n, kind = (item.get("n"), item.get("type")) if isinstance(item, dict) else (item, cs.DEFAULT_TYPE)
+            if not (isinstance(n, int) and 0 < n < 1000) or n in done:
                 continue
+            done.add(n)
+            kind = kind if kind in cs.PROBE_TYPES else cs.DEFAULT_TYPE
             key = f"{date:%y%m%d}播種({n})"
-            out.append(make(root / key / "DIV0", f"{key}\\DIV0"))
+            r = make(root / key / "DIV0", f"{key}\\DIV0　{kind}電極")
+            if r["ok"]:
+                prev = types.get(key)
+                if prev != kind:
+                    try:
+                        cs.save_type(key, kind)
+                        if not r.get("made") and cs.type_of(key, types) != kind:
+                            r["msg"] = f"既にあります（電極の種類を {kind} に変更しました）"
+                    except OSError as e:
+                        r.update(ok=False, msg=f"電極の種類を記録できませんでした（{e}）")
+            out.append(r)
     return out
 
 
@@ -124,6 +144,16 @@ h2 .sub{font-weight:400;color:var(--quiet);font-size:13px}
 .cal-f{display:flex;justify-content:flex-end;margin-top:8px}
 .cal-f .btn{padding:4px 12px;font-size:13px}
 .new .hint code{font-family:Consolas,monospace;color:var(--ink);font-size:13px}
+.prow{display:flex;align-items:center;gap:16px;padding:6px 0}
+.prow select{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit;
+  color-scheme:dark;cursor:pointer}
+.prow input.dup{border-color:var(--bad)}
+.prow .x{margin-left:auto;background:none;border:0;color:var(--quiet);font:inherit;font-size:18px;line-height:1;width:30px;height:30px;
+  border-radius:6px;cursor:pointer}
+.prow .x:hover{color:var(--ink);background:rgba(255,255,255,.06)}
+.add{background:none;border:1px dashed rgba(255,255,255,.18);color:var(--quiet);border-radius:8px;padding:6px 12px;font:inherit;
+  cursor:pointer;margin:6px 0 10px}
+.add:hover{color:var(--ink);border-color:rgba(255,255,255,.3)}
 input[type=text]{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;
   padding:5px 8px;font:inherit;color-scheme:dark}
 .list{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -140,8 +170,9 @@ label.row input{transform:scale(1.25);accent-color:var(--accent)}
 .div small{font-weight:400;color:var(--quiet);margin-left:6px}
 .more{display:block;margin:8px 0 0;background:none;border:0;color:var(--quiet);font:inherit;font-size:13px;cursor:pointer;padding:0}
 .more:hover{color:var(--ink)}
-.new{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
-.new .hint{color:var(--quiet);font-size:12px}
+.new{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.new .nd{padding:2px 0 8px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.new .hint{color:var(--quiet);font-size:12px;line-height:1.9}
 .btn{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 12px;font:inherit;cursor:pointer}
 .btn:hover{border-color:rgba(255,255,255,.25)}
 #bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:12px 24px;
@@ -213,7 +244,7 @@ function render() {
     const last = s.divs.length ? `前回 DIV${s.divs.at(-1)}` : 'まだ DIV フォルダなし';
     const right = d < 0 ? '播種前' : `DIV${d}<small>${has ? '作成済み' : 'を作成'}</small>`;
     return `<label class="row${off ? ' off' : ''}"><input type="checkbox" data-key="${s.key}"${picked.has(s.key) ? ' checked' : ''}${off ? ' disabled' : ''}>`
-      + `<span class="dish">MEA-Probe ${s.probe}</span><span><span class="seed">${md(s.seed)} 播種</span>　<span class="prev">${last}</span></span>`
+      + `<span class="dish">MEA-Probe ${s.probe}</span><span><span class="seed">${md(s.seed)} 播種・${s.type}電極</span>　<span class="prev">${last}</span></span>`
       + `<span class="div">${right}</span></label>`;
   }).join('') : '<div style="padding:12px 16px;color:var(--quiet)">最近播種したMEA-Probe はありません</div>';
   const older = Math.max(0, seeds.length - D.recent);
@@ -221,13 +252,14 @@ function render() {
   $('more').textContent = showAll ? '最近のMEA-Probe だけ表示' : `以前のMEA-Probe も表示（${older} 件）`;
   const probes = parseProbes();
   const sd = $('seedDate').dataset.value, yymmdd = sd.slice(2, 4) + sd.slice(5, 7) + sd.slice(8, 10);
-  const have = new Set(seeds.map(s => s.key));
+  const have = new Map(seeds.map(s => [s.key, s.type]));
   $('newHint').innerHTML = probes.length
-    ? '作成するフォルダ：' + probes.map(n => {
-        const k = `${yymmdd}播種(${n})`;
-        return `<code>${k}\\DIV0</code>` + (have.has(k) ? '（既にあります）' : '');
-      }).join('　')
-    : 'Probe 番号を入れると、作成するフォルダ名がここに表示されます。同じ日に複数播種したときは「5, 6」のように区切って入れます';
+    ? '作成するフォルダ：<br>' + probes.map(p => {
+        const k = `${yymmdd}播種(${p.n})`;
+        const note = !have.has(k) ? '' : have.get(k) === p.type ? '（既にあります）' : `（既にあります。電極の種類を ${p.type} に変更します）`;
+        return `<code>${k}\\DIV0</code>　${p.type}電極${note}`;
+      }).join('<br>')
+    : 'Probe 番号を入れると、作成するフォルダ名がここに表示されます。同じ日に複数播種したときは「MEA-Probe を追加」で欄を増やします';
   for (const id of ['shoot', 'seedDate']) $(id).innerHTML = `${dayLabel($(id).dataset.value)}<span class="caret">▾</span>`;
   const n = picked.size + probes.length;
   $('go').disabled = n === 0;
@@ -238,22 +270,58 @@ $('list').addEventListener('change', ev => {
   const k = ev.target.dataset.key;
   if (k) { ev.target.checked ? picked.add(k) : picked.delete(k); render(); }
 });
-// 同じ日に複数の MEA-Probe を播種したときは「5, 6」「5 6」「5、6」のように区切って入れる（1 つずつ別のフォルダになる）
+// 新しく播種した MEA-Probe：1 つにつき 1 行（Probe 番号と電極の種類）。同じ日に複数播種したときは行を増やす（1 つずつ別のフォルダになる）
+// 種類を自分で選んでいない行は、その番号の MEA-Probe を前回使ったときの種類を自動で入れる
+const lastType = {};
+for (const s of D.seeds) if (!(s.probe in lastType)) lastType[s.probe] = s.type;    // seeds は新しい播種から並んでいる
+const TYPE_OPTS = D.types.map(t => `<option value="${t.id}">${t.id}電極（${t.need} 枚${t.need === 1 ? '・合成なし' : 'を合成'}）</option>`).join('');
+function addRow() {
+  const row = document.createElement('div');
+  row.className = 'prow';
+  row.innerHTML = '<label>Probe 番号 <input type="text" class="pn" inputmode="numeric" size="6" placeholder="例：5"></label>'
+    + `<label>電極の種類 <select class="pt">${TYPE_OPTS}</select></label>`
+    + '<button type="button" class="x" title="この欄を消す">×</button>';
+  $('rows').append(row);
+  row.querySelector('.pn').focus();
+  render();
+}
+$('rows').addEventListener('input', ev => {
+  const row = ev.target.closest('.prow');
+  if (ev.target.classList.contains('pn')) {
+    ev.target.value = ev.target.value.replace(/[^\d]/g, '').slice(0, 3);
+    const sel = row.querySelector('.pt'), n = +ev.target.value;
+    if (!sel.dataset.touched) sel.value = lastType[n] || D.types[0].id;
+  }
+  render();
+});
+$('rows').addEventListener('change', ev => {
+  if (ev.target.classList.contains('pt')) { ev.target.dataset.touched = '1'; render(); }
+});
+$('rows').addEventListener('click', ev => {
+  if (ev.target.classList.contains('x')) { ev.target.closest('.prow').remove(); render(); }
+});
+$('addRow').onclick = addRow;
 function parseProbes() {
-  const out = [];
-  for (const t of $('probes').value.split(/[,、，\s]+/)) {
-    if (/^\d{1,3}$/.test(t) && +t > 0 && !out.includes(+t)) out.push(+t);
+  const out = [], count = {};
+  const rows = [...$('rows').querySelectorAll('.prow')];
+  for (const r of rows) { const v = r.querySelector('.pn').value; if (v) count[v] = (count[v] || 0) + 1; }
+  for (const r of rows) {
+    const inp = r.querySelector('.pn'), n = +inp.value;
+    inp.classList.toggle('dup', count[inp.value] > 1);
+    if (n > 0 && !out.some(p => p.n === n)) out.push({n, type: r.querySelector('.pt').value});
   }
   return out;
 }
-$('probes').addEventListener('input', () => { $('probes').value = $('probes').value.replace(/[^\d,、，\s]/g, ''); render(); });
 $('more').onclick = () => { showAll = !showAll; render(); };
 
 $('go').onclick = async () => {
   const probes = parseProbes();
   const res = await post('/create', {shoot: $('shoot').dataset.value, keys: [...picked],
                                       new: probes.length ? {date: $('seedDate').dataset.value, probes} : null});
-  seeds = res.seeds; picked.clear(); $('probes').value = '';
+  seeds = res.seeds; picked.clear();
+  for (const k in lastType) delete lastType[k];
+  for (const s of seeds) if (!(s.probe in lastType)) lastType[s.probe] = s.type;
+  $('rows').innerHTML = ''; addRow();
   $('res').innerHTML = '<h2>結果</h2>' + res.results.map((r, i) =>
     `<div class="r ${!r.ok ? 'ng' : r.made ? 'ok' : 'ex'}"><span class="m">${r.msg}</span><span class="p">${r.label}</span>`
     + (r.path ? `<button class="btn" data-copy="${i}">パスをコピー</button><button class="btn" data-open="${i}">開く</button>` : '')
@@ -268,14 +336,16 @@ $('go').onclick = async () => {
 
 post('/ping'); const beat = setInterval(() => post('/ping'), 5000);
 $('quit').onclick = async () => { clearInterval(beat); await post('/quit').catch(() => {}); $('done').style.display = 'flex'; window.close(); };
-render();
+addRow();
 """
 
 
 def render_page(seeds: list[dict], token: str, brand: str | None = None) -> str:
     brand = brand or LOGO + '<span class="name">culture-<b>folders</b></span>'
     today = dt.date.today().isoformat()
-    data = json.dumps({"token": token, "today": today, "recent": RECENT_COUNT, "seeds": seeds}, ensure_ascii=False)
+    types = [{"id": k, "need": v} for k, v in cs.PROBE_TYPES.items()]
+    data = json.dumps({"token": token, "today": today, "recent": RECENT_COUNT, "seeds": seeds, "types": types},
+                      ensure_ascii=False)
     data = data.replace("</", "<\\/")
     return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>フォルダ作成 | culture-tools</title>'
             f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}</style><body>'
@@ -285,9 +355,9 @@ def render_page(seeds: list[dict], token: str, brand: str | None = None) -> str:
             f'<span class="sub">撮影日 <button class="date" id="shoot" data-value="{today}"></button></span></h2>'
             f'<div class="list" id="list"></div><button class="more" id="more"></button>'
             f'<h2>新しく播種したMEA-Probe</h2>'
-            f'<div class="new"><span>播種日 <button class="date" id="seedDate" data-value="{today}"></button></span>'
-            f'<span>Probe 番号 <input type="text" id="probes" size="12" placeholder="例：5 または 5, 6"></span>'
-            f'<span class="hint" id="newHint"></span></div>'
+            f'<div class="new"><div class="nd">播種日 <button class="date" id="seedDate" data-value="{today}"></button></div>'
+            f'<div id="rows"></div><button type="button" class="add" id="addRow">＋ MEA-Probe を追加</button>'
+            f'<div class="hint" id="newHint"></div></div>'
             f'<div id="res"></div></main><div id="bar"><button id="go"></button></div>'
             f'<div id="cal"></div><div id="done">終了しました。このタブは閉じて構いません。</div>'
             f'<script id="data" type="application/json">{data}</script><script>{JS}</script></body></html>')

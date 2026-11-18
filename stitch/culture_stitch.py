@@ -8,6 +8,7 @@
 
 合成の本体は image-stitcher (https://github.com/kkito0726/image-stitcher) と同じく
 OpenCV の cv2.Stitcher をスキャンモード・既定設定で使う。
+515電極の MEA-Probe は 1 枚で撮り終えるため合成はせず、電極の検出・傾き補正・切り出しだけを行う。
 """
 from __future__ import annotations
 
@@ -27,10 +28,16 @@ from PIL import Image
 
 TOOL_DIR = Path(__file__).resolve().parent
 CONFIG = TOOL_DIR.parent / "app" / "config.json"   # 写真のフォルダの場所（初回起動時に選んだもの）
+TYPES_FILE = TOOL_DIR.parent / "app" / "probes.json"   # 播種フォルダごとの電極の種類（フォルダ作成で入れたもの）
 REVIEW_DIR = TOOL_DIR / "review"
 MANIFEST = REVIEW_DIR / "last_run.json"
 
-N_IMAGES = 6            # 1 フォルダあたりの撮影枚数
+N_IMAGES = 6            # 545電極の 1 フォルダあたりの撮影枚数
+# MEA-Probe の電極の種類 → 1 フォルダあたりの撮影枚数。どちらも 8×8（64電極）
+#   545：電極の一辺 50 µm、電極間距離 450 µm。6 枚に分けて撮り、合成する
+#   515：545 より電極が密。1 枚に収まるので合成はせず、電極の検出・傾き補正・切り出しだけを行う
+PROBE_TYPES = {"545": N_IMAGES, "515": 1}
+DEFAULT_TYPE = "545"    # 種類の記録がない MEA-Probe（この機能より前に作ったフォルダなど）は 545 とみなす
 GRID = 8                # 電極は 8×8
 MARGIN_PITCH = 1.0      # 最外周の電極中心から外側に残す余白（電極間距離の何倍か）
 JPEG_QUALITY = 95       # image-stitcher のダウンロード既定値と同じ
@@ -52,6 +59,37 @@ def save_root(root: Path) -> None:
     CONFIG.write_text(json.dumps({"root": str(root)}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ---------------------------------------------------------------- 電極の種類
+
+SEED_RE = re.compile(r"^(\d{6})播種\((\d+)\)$")
+
+
+def load_types() -> dict[str, str]:
+    """播種フォルダ名（例：261118播種(3)）→ 電極の種類（"545" / "515"）"""
+    try:
+        d = json.loads(TYPES_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in d.items() if v in PROBE_TYPES} if isinstance(d, dict) else {}
+
+
+def save_type(seed_key: str, kind: str) -> None:
+    if kind not in PROBE_TYPES:
+        raise ValueError(kind)
+    types = load_types()
+    types[seed_key] = kind
+    TYPES_FILE.write_text(json.dumps(dict(sorted(types.items())), ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def type_of(seed_key: str, types: dict[str, str] | None = None) -> str:
+    return (load_types() if types is None else types).get(seed_key, DEFAULT_TYPE)
+
+
+def need_of(kind: str) -> int:
+    """その種類の MEA-Probe で、1 フォルダに撮る枚数"""
+    return PROBE_TYPES.get(kind, N_IMAGES)
+
+
 # ---------------------------------------------------------------- フォルダ情報
 
 @dataclass
@@ -61,28 +99,36 @@ class FolderInfo:
     probe: int | None
     seed_date: dt.date | None
     div: int | None
+    kind: str = DEFAULT_TYPE         # 電極の種類（545 / 515）
+
+    @property
+    def need(self) -> int:
+        """このフォルダで合成に使う枚数（545 は 6 枚、515 は 1 枚）"""
+        return need_of(self.kind)
 
 
-def parse_folder(folder: Path, raw_files: list[Path]) -> FolderInfo:
+def parse_folder(folder: Path, raw_files: list[Path], types: dict[str, str] | None = None) -> FolderInfo:
     """フォルダ名から Probe 番号・播種日・DIV（Days In Vitro: 播種後経過日数）を読み取る。
 
     想定する構成: 261028播種(6)/DIV7（1 つの播種フォルダに Probe 番号は 1 つ）
     """
     probe = seed = div = None
+    kind = DEFAULT_TYPE
     parts = folder.parts
     for i, name in enumerate(parts):
-        m = re.match(r"^(\d{6})播種\((\d+)\)$", name)
+        m = SEED_RE.match(name)
         if not m:
             continue
         seed = dt.datetime.strptime(m.group(1), "%y%m%d").date()
         probe = int(m.group(2))
+        kind = type_of(name, types)
         rest = parts[i + 1:]
         if rest:
             d = re.match(r"^DIV(\d+)$", rest[0], re.IGNORECASE)
             if d:
                 div = int(d.group(1))
         break
-    return FolderInfo(folder, raw_files, probe, seed, div)
+    return FolderInfo(folder, raw_files, probe, seed, div, kind)
 
 
 def exif_datetime(path: Path) -> dt.datetime | None:
@@ -102,7 +148,8 @@ def find_targets(paths: list[Path]) -> list[FolderInfo]:
             raws = sorted(p for p in d.iterdir() if p.is_file() and RAW_PATTERN.match(p.name))
             if raws:
                 folders[d] = raws
-    return [parse_folder(d, r) for d, r in sorted(folders.items())]
+    types = load_types()
+    return [parse_folder(d, r, types) for d, r in sorted(folders.items())]
 
 
 # ---------------------------------------------------------------- 画像処理
@@ -230,9 +277,9 @@ class Result:
 
 def process(info: FolderInfo, force: bool) -> Result:
     res = Result(str(info.path), "ok", raw_files=[str(p) for p in info.raw_files])
-    if len(info.raw_files) != N_IMAGES:
+    if len(info.raw_files) != info.need:
         res.status = "skip"
-        res.messages.append(f"IMG ファイルが {len(info.raw_files)} 枚です（{N_IMAGES} 枚のフォルダのみ処理します）")
+        res.messages.append(f"IMG ファイルが {len(info.raw_files)} 枚です（{info.kind}電極は {info.need} 枚のフォルダのみ処理します）")
         return res
     if info.probe is None:
         res.status = "skip"
@@ -263,7 +310,7 @@ def process(info: FolderInfo, force: bool) -> Result:
 
     try:
         images = [imread(p) for p in info.raw_files]
-        pano = stitch(images)
+        pano = stitch(images) if len(images) > 1 else images[0]   # 515 は 1 枚なので合成しない
         lat = fit_lattice(detect_electrodes(pano, images[0].shape[1]))
         warns = check_lattice(lat)
         cropped = crop_square(pano, lat)
@@ -290,7 +337,7 @@ def process(info: FolderInfo, force: bool) -> Result:
     name = re.sub(r"[^\w]+", "_", str(info.path.relative_to(info.path.anchor))) + ".jpg"
     imwrite(REVIEW_DIR / name, prev, 85)
     res.preview = name
-    res.messages.insert(0, f"電極 {lat.found}/64 個を検出、電極間距離 {pitch:.0f} px、傾き補正 {np.degrees(np.arctan2(lat.a[1], lat.a[0])):+.2f}°")
+    res.messages.insert(0, f"{info.kind}電極（{'合成なし・1 枚から切り出し' if info.need == 1 else f'{info.need} 枚を合成'}）。電極 {lat.found}/64 個を検出、電極間距離 {pitch:.0f} px、傾き補正 {np.degrees(np.arctan2(lat.a[1], lat.a[0])):+.2f}°")
     return res
 
 
@@ -307,7 +354,7 @@ main>p{color:var(--quiet);font-size:13px;line-height:1.7}
 section{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--quiet);border-radius:10px;
   margin:0 0 16px;padding:12px 16px}
 section.ok{border-left-color:var(--good)} section.warn{border-left-color:var(--warn)} section.error{border-left-color:var(--bad)}
-section.skip,section.deleted,section.retake{opacity:.55}
+section.skip,section.deleted,section.retake{border-left-color:var(--quiet)}
 h2{font-size:14px;font-weight:600;margin:0 0 4px;word-break:break-all} h2 span.st{display:inline-block;min-width:5em;font-weight:700}
 section.ok .st{color:var(--good)} section.warn .st{color:var(--warn)} section.error .st{color:var(--bad)}
 section.skip .st,section.deleted .st,section.retake .st{color:var(--quiet)}
@@ -348,7 +395,7 @@ async function post(path, body){
 }
 del.addEventListener('click', async () => {
   const ids = boxes.filter(b => b.checked && !b.disabled).map(b => Number(b.value));
-  if(!confirm(`${ids.length} フォルダの元画像（各6枚）をごみ箱へ移動します。よろしいですか？`)) return;
+  if(!confirm(`${ids.length} フォルダの元画像をごみ箱へ移動します。よろしいですか？`)) return;
   del.disabled = true; msg.textContent = '移動中...';
   try {
     const res = await post('/delete', {ids});
@@ -629,7 +676,7 @@ def cmd_stitch(args) -> None:
         sys.exit(3)
     results = []
     for info in targets:
-        if len(info.raw_files) == N_IMAGES:
+        if len(info.raw_files) == info.need:
             print(f"処理中: {info.path}")
         r = process(info, args.force)
         print(f"  [{r.status}] " + " / ".join(r.messages))

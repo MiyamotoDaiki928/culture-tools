@@ -4,7 +4,8 @@
   ・EOS Utility の保存先は「取り込み元フォルダ」1 か所に固定しておく。
   ・culture-tools の「撮影」画面で、今日撮る MEA-Probe を撮る順に選んで「撮影を始める」を押す。
   ・撮影モードのあいだに取り込み元フォルダへ届いた写真（IMG_数字.JPG）だけを、
-    いま撮っている MEA-Probe の DIV フォルダへ移す。6 枚そろったら「次の MEA-Probe へ」を押して切り替える。
+    いま撮っている MEA-Probe の DIV フォルダへ移す。決まった枚数（545電極は 6 枚、515電極は 1 枚）がそろったら
+    「次の MEA-Probe へ」を押して切り替える。
 
 培地写真以外で EOS Utility を使うとき
   ・撮影モードでないときは、取り込み元フォルダの中身には一切触れない。
@@ -30,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "stitch"))
 import culture_stitch as cs                         # noqa: E402
 
 RAW_RE = cs.RAW_PATTERN                              # IMG_数字.JPG
-EXTRA_RE = re.compile(r"^\d{6}_\d+_extra\d+\.jpe?g$", re.IGNORECASE)   # 7 枚目以降（拡大写真など）：撮影日_番号_extra連番.JPG
+EXTRA_RE = re.compile(r"^\d{6}_\d+_extra\d+\.jpe?g$", re.IGNORECASE)   # 決まった枚数より後（拡大写真など）：撮影日_番号_extra連番.JPG
 IDLE_LIMIT = 30 * 60                                 # 写真がこの秒数届かなければ撮影モードを終える
 SCAN_DEPTH = 2                                       # 取り込み元フォルダの何段下まで見るか（日付ごとのフォルダに保存する設定に対応）
 POLL = 1.0
@@ -85,8 +86,10 @@ def today_targets(root: Path, scan: list[dict], day: dt.date | None = None) -> l
     for s in scan:
         div = (day - dt.date.fromisoformat(s["seed"])).days
         if div >= 0 and div in s["divs"]:
+            kind = s.get("type", cs.DEFAULT_TYPE)
             out.append({"key": s["key"], "probe": s["probe"], "div": div,
-                        "path": str(root / s["key"] / f"DIV{div}"), "seed": s["seed"]})
+                        "path": str(root / s["key"] / f"DIV{div}"), "seed": s["seed"],
+                        "type": kind, "need": cs.need_of(kind)})
     return out
 
 
@@ -236,7 +239,8 @@ class Session:
                     cls.note(f"{p.name}：移し先のフォルダ {target.parent.name}\\{target.name} が見つからないため、取り込み元に残しています")
                 continue
             name = p.name
-            if raw_count(target) >= cs.N_IMAGES:            # 6 枚そろったあとの写真は、合成に使わない追加の写真として名前を変える
+            need = cls.queue[ti]["need"]
+            if raw_count(target) >= need:                   # 決まった枚数がそろったあとの写真は、合成に使わない追加の写真として名前を変える
                 name = extra_name(target, cls.queue[ti]["probe"], p.suffix)
             dst = target / name
             if dst.exists():
@@ -256,7 +260,7 @@ class Session:
                 except OSError:
                     pass
             if name != p.name:
-                cls.note(f"{p.name} は 7 枚目以降なので、追加の写真 {name} として保存しました（合成には使いません）")
+                cls.note(f"{p.name} は {need + 1} 枚目以降なので、追加の写真 {name} として保存しました（合成には使いません）")
             cls.sizes.pop(k, None)
             cls.history.append({"src": k, "dst": str(dst), "extra": extra, "target": ti})
             cls.last = time.time()
@@ -300,14 +304,15 @@ class Session:
         with cls.lock:
             q = []
             for i, t in enumerate(cls.queue):
-                q.append({**t, "count": raw_count(Path(t["path"])), "label": f"MEA-Probe {t['probe']}"})
+                q.append({**t, "count": raw_count(Path(t["path"])), "label": f"MEA-Probe {t['probe']}（{t['type']}）"})
             # いまの MEA-Probe のフォルダにある写真すべて（中断のあとに再開したときは、前回の分も含む）
             cur = Path(cls.queue[cls.idx]["path"]) if cls.queue else None
             shots = [f.name for f in raw_files(cur)] if cur else []
             extras = [f.name for f in extra_files(cur)] if cur else []
             can_undo = bool(cls.history) and cls.history[-1]["target"] == cls.idx
             return {"active": cls.active, "finished": cls.finished, "ended": cls.ended, "idx": cls.idx,
-                    "queue": q, "shots": shots, "extras": extras, "undo": can_undo, "notes": cls.notes, "need": cs.N_IMAGES,
+                    "queue": q, "shots": shots, "extras": extras, "undo": can_undo, "notes": cls.notes,
+                    "need": cls.queue[cls.idx]["need"] if cls.queue else cs.N_IMAGES,
                     "inbox": str(cls.inbox) if cls.inbox else ""}
 
 
@@ -409,14 +414,14 @@ async function poll() {
   $('undo').disabled = !s.undo;
   // 最後の MEA-Probe を撮り終えたら「撮影を完了する」だけにする（中断は、撮り終える前にやめるときのもの）
   $('end').style.display = (s.idx + 1 >= s.queue.length && n === need) ? 'none' : '';
-  $('q').innerHTML = s.queue.map((x, i) => `<li class="${i === s.idx ? 'cur' : i < s.idx ? 'done' : ''}">${x.label}（DIV${x.div}・${+x.seed.slice(5, 7)}/${+x.seed.slice(8, 10)} 播種）　${x.count} 枚</li>`).join('');
+  $('q').innerHTML = s.queue.map((x, i) => `<li class="${i === s.idx ? 'cur' : i < s.idx ? 'done' : ''}">${x.label}（DIV${x.div}・${+x.seed.slice(5, 7)}/${+x.seed.slice(8, 10)} 播種）　${x.count} / ${x.need} 枚</li>`).join('');
   $('notes').textContent = s.notes.join('\n');
   setTimeout(poll, 1000);
 }
 if ($('next')) {
   $('next').onclick = async () => {
     const s = await (await fetch('/capture/status?t=' + T)).json(), cur = s.queue[s.idx];
-    if (cur.count !== s.need && !confirm(`${cur.label} の写真は ${cur.count} 枚です（6 枚ではありません）。このまま次へ進みますか？`)) return;
+    if (cur.count !== s.need && !confirm(`${cur.label} の写真は ${cur.count} 枚です（${s.need} 枚ではありません）。このまま次へ進みますか？`)) return;
     await post('/capture/next'); poll();
   };
   $('undo').onclick = async () => { const r = await post('/capture/undo'); if (r.error) alert(r.error); seen = ''; };
@@ -434,15 +439,15 @@ def stitched(t: dict) -> bool:
         return False
 
 
-def shot_label(n: int, done: bool = False) -> str:
+def shot_label(n: int, need: int, done: bool = False) -> str:
     """選ぶ一覧に、そのフォルダに既にある写真の枚数を出す（中断したあとの再開や、撮り終えたものの見分けに使う）"""
     if done:
         return '<span style="margin-left:auto;color:var(--quiet)">合成済み</span>'
     if n == 0:
         return ""
-    color = "var(--good)" if n == cs.N_IMAGES else "var(--accent)"
-    word = "撮影済み" if n == cs.N_IMAGES else "撮影途中"
-    return f'<span style="margin-left:auto;color:{color}">{word}　{n} / {cs.N_IMAGES} 枚</span>'
+    color = "var(--good)" if n == need else "var(--accent)"
+    word = "撮影済み" if n == need else "撮影途中"
+    return f'<span style="margin-left:auto;color:{color}">{word}　{n} / {need} 枚</span>'
 
 
 def render_page(root: Path, scan: list[dict], token: str, brand: str, favicon: str) -> str:
@@ -472,8 +477,8 @@ def render_page(root: Path, scan: list[dict], token: str, brand: str, favicon: s
     targets = today_targets(root, scan)
     picks = "".join(
         f'<div class="pick" data-key="{t["key"]}"><span class="ord"></span><b>MEA-Probe {t["probe"]}</b>'
-        f'<span class="q">DIV{t["div"]}　{dt.date.fromisoformat(t["seed"]):%m/%d} 播種</span>'
-        f'{shot_label(raw_count(Path(t["path"])), stitched(t))}</div>' for t in targets)
+        f'<span class="q">{t["type"]}電極　DIV{t["div"]}　{dt.date.fromisoformat(t["seed"]):%m/%d} 播種</span>'
+        f'{shot_label(raw_count(Path(t["path"])), t["need"], stitched(t))}</div>' for t in targets)
     if not targets:
         picks = (f'<p class="hint">今日の DIV フォルダがまだありません。先に <a href="/folders?t={token}" '
                  'style="color:var(--accent)">「フォルダ作成」</a> で作ってください。</p>')

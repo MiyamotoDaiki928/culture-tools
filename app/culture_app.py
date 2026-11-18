@@ -76,7 +76,7 @@ _pending_lock = threading.Lock()
 
 
 def pending(fresh: bool = False) -> tuple[list, list]:
-    """合成待ち（IMG が 6 枚で合成画像がまだない）と、枚数が 6 枚でないフォルダ。30 秒間は前回の結果を使う。"""
+    """合成待ち（IMG が決まった枚数〔545 は 6 枚、515 は 1 枚〕で合成画像がまだない）と、枚数が合わないフォルダ。30 秒間は前回の結果を使う。"""
     with _pending_lock:
         if fresh or time.monotonic() - _pending["t"] > 30:
             ready, odd = [], []
@@ -86,7 +86,7 @@ def pending(fresh: bool = False) -> tuple[list, list]:
                 done = re.compile(rf"^\d{{6}}_{info.probe}\.jpe?g$", re.IGNORECASE)
                 if any(done.match(f.name) for f in info.path.iterdir() if f.is_file()):
                     continue
-                (ready if len(info.raw_files) == cs.N_IMAGES else odd).append(info)
+                (ready if len(info.raw_files) == info.need else odd).append(info)
             _pending.update(t=time.monotonic(), ready=ready, odd=odd)
         return _pending["ready"], _pending["odd"]
 
@@ -109,13 +109,13 @@ class Job:
 def run_stitch() -> None:
     try:
         infos = cs.find_targets([ROOT])
-        Job.total = sum(len(i.raw_files) == cs.N_IMAGES for i in infos)
+        Job.total = sum(len(i.raw_files) == i.need for i in infos)
         results = []
         for info in infos:
-            if len(info.raw_files) == cs.N_IMAGES:
+            if len(info.raw_files) == info.need:
                 Job.current = rel(info.path)
             r = cs.process(info, False)
-            if len(info.raw_files) == cs.N_IMAGES:
+            if len(info.raw_files) == info.need:
                 Job.done += 1
             print(f"  [{r.status}] {info.path} " + " / ".join(r.messages))
             results.append(r)
@@ -207,7 +207,7 @@ RETAKE_JS = r"""
       } else {
         p.className = 'done';
         p.textContent = r.today ? `${r.moved} 個のファイルをごみ箱へ移しました。画面下の「撮り直しの撮影を始める」から撮影できます`
-                                : `${r.moved} 個のファイルをごみ箱へ移しました。今日の DIV フォルダではないため撮影モードは使えません。このフォルダに直接 6 枚を入れてください`;
+                                : `${r.moved} 個のファイルをごみ箱へ移しました。今日の DIV フォルダではないため撮影モードは使えません。このフォルダに撮り直した写真を直接入れてください`;
         sec.className = 'retake'; sec.querySelector('.st').textContent = '撮り直し';
         const box = sec.querySelector('input.pick'); if (box) { box.checked = false; box.disabled = true; box.parentElement.remove(); }
         b.remove(); refresh();
@@ -259,13 +259,14 @@ def stitch_page(token: str) -> str:
                               extra_js=AGAIN_JS + RETAKE_JS, folder_label=lambda f: rel(Path(f)), retake=True)
         return unify(page, "合成結果の確認")
     ready, odd = pending(fresh=not Job.running)
-    rows = "".join(f'<li>{rel(i.path)}</li>' for i in ready)
-    odd_rows = "".join(f'<li>{rel(i.path)}　IMG ファイルが {len(i.raw_files)} 枚</li>' for i in odd)
+    rows = "".join(f'<li>{rel(i.path)}　{i.kind}電極{"（1 枚・合成なし）" if i.need == 1 else ""}</li>' for i in ready)
+    odd_rows = "".join(f'<li>{rel(i.path)}　{i.kind}電極：IMG ファイルが {len(i.raw_files)} 枚（{i.need} 枚で合成します）</li>'
+                       for i in odd)
     body = (f'<section class="ok"><h2>合成待ちのフォルダ（{len(ready)}）</h2><ul>{rows}</ul></section>' if ready else
             '<section class="skip"><h2>合成前の写真が入ったフォルダはありません</h2>'
-            '<ul><li>撮影した 6 枚（IMG_数字.JPG）を DIV フォルダに入れると、ここに表示されます</li></ul></section>')
+            '<ul><li>撮影した写真（IMG_数字.JPG。545電極は 6 枚、515電極は 1 枚）を DIV フォルダに入れると、ここに表示されます</li></ul></section>')
     if odd:
-        body += (f'<section class="warn"><h2>枚数が 6 枚でないため合成しないフォルダ（{len(odd)}）</h2><ul>{odd_rows}</ul>'
+        body += (f'<section class="warn"><h2>枚数が合わないため合成しないフォルダ（{len(odd)}）</h2><ul>{odd_rows}</ul>'
                  '</section>')
     last = last_results()
     if last:
@@ -282,7 +283,8 @@ def stitch_page(token: str) -> str:
             'border-radius:8px;padding:6px 14px;font:inherit;cursor:pointer}.btn-line:hover{border-color:rgba(255,255,255,.3)}'
             f'</style><body data-token="{token}" data-running="{1 if Job.running else 0}">'
             f'<header class="top">{brand("stitch", token)}</header><main><h1>合成</h1>'
-            '<p>合成前の写真（IMG_数字.JPG が 6 枚）が入った DIV フォルダを写真のフォルダの中から探し、まとめて合成します。'
+            '<p>合成前の写真（IMG_数字.JPG。545電極は 6 枚、515電極は 1 枚）が入った DIV フォルダを写真のフォルダの中から探し、まとめて合成します。'
+            '515電極の写真は 1 枚なので合成はせず、電極を検出して傾きを補正し、正方形に切り出します。'
             '合成が終わると、この画面に結果が表示されます。</p>'
             f'{body}</main><div id="bar"><button id="run"{"" if ready else " disabled"}>{label}</button>'
             '<div id="prog-wrap"><div id="prog"></div></div><span id="msg"></span></div>'
