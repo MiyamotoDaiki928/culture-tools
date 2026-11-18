@@ -371,12 +371,16 @@ def serve() -> None:
                     return self._html(stitch_page(token))
                 if parts == ["stitch", "status"]:
                     return self._json({"running": Job.running, "done": Job.done, "total": Job.total, "current": Job.current})
+                if parts == ["missing"]:                     # 見比べに出ない画像と、その理由・表示されるようにする方法
+                    return self._html(cv.render_missing(cv.diagnose(ROOT, viewer["entries"])))
                 if parts == ["viewer"]:
                     entries, warns = cv.scan(ROOT)
                     viewer["entries"] = entries
-                    if not entries:
+                    if not entries:                          # 初めて使う人向けに、どの形にすれば表示されるかを案内する
                         return self._html(simple_page("viewer", "見比べ", token,
-                                                      "<h1>見比べ</h1><p>見比べられる合成画像が見つかりませんでした。</p>"))
+                                                      f"<style>{cv.MISSING_CSS}</style><h1>見比べ</h1>"
+                                                      "<p>見比べられる合成画像が見つかりませんでした。</p>"
+                                                      + cv.render_missing(cv.diagnose(ROOT, entries))))
                     return self._html(unify(cv.render_page(entries, cv.group(entries), warns, token,
                                                            brand("viewer", token)), "見比べ"))
                 if len(parts) == 2 and parts[1].isdigit():

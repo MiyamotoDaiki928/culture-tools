@@ -185,6 +185,181 @@ def scale_info(e: dict) -> dict:
     return {"ratio": c["ratio"], "um": cs.PITCH_UM.get(kind, cs.PITCH_UM[cs.DEFAULT_TYPE]), "type": kind}
 
 
+
+# ---------------------------------------------------------------- 見比べに出ない画像を調べる
+
+# 見比べに出すための形を、まだ慣れていない人にも示せるよう、写真のフォルダの中で表示されていない画像を探し、
+# 理由と「この場所・この名前にすれば表示される」という提案を返す。ファイルの移動や名前の変更はしない（読むだけ）。
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".heic", ".webp"}
+EXTRA_RE = re.compile(r"^\d{6}_\d+_.+\.jpe?g$", re.IGNORECASE)          # 追加の写真（例：261109_5_extra1.JPG、261026_5_ch10.JPG）
+DAY_RE = re.compile(r"^(?:DIV|day|d)\s*[_-]?\s*(\d+)$", re.IGNORECASE)   # DIV7・day7・Day 7・d7 など
+SEEDISH_RE = re.compile(r"^(\d{6})")                                      # 先頭が日付（YYMMDD）のフォルダ名
+NUMS_RE = re.compile(r"\(([^)]*)\)")
+MISSING_LIMIT = 500                                                       # 一覧に出す件数の上限
+
+
+def _probes_in(name: str) -> list[int]:
+    m = NUMS_RE.search(name)
+    return [int(x) for x in re.findall(r"\d+", m.group(1))] if m else []
+
+
+def diagnose(root: Path, entries: list[dict]) -> dict:
+    """見比べに表示されていない画像と、その理由・表示されるようにするための場所と名前"""
+    shown = {Path(e["path"]) for e in entries}
+    items, raw_dirs, extras = [], {}, 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith((".", "$")))
+        d = Path(dirpath)
+        for fn in sorted(filenames):
+            f = d / fn
+            if f.suffix.lower() not in IMAGE_EXT or f in shown:
+                continue
+            rel = f.relative_to(root)
+            parts = rel.parts[:-1]
+            seed_ok = len(parts) >= 1 and SEED_RE.match(parts[0])
+            div_ok = len(parts) == 2 and seed_ok and DIV_RE.match(parts[1])
+            if div_ok and cs.RAW_PATTERN.match(fn):
+                k = "\\".join(parts)
+                raw_dirs[k] = raw_dirs.get(k, 0) + 1     # 合成前の写真
+                continue
+            if div_ok and (EXTRA_RE.match(fn) or any(IMG_RE.match(x.name) for x in d.iterdir() if x.is_file())):
+                extras += 1                                       # 合成画像のある DIV フォルダの、それ以外の写真
+                continue
+            items.append(_explain(rel))
+            if len(items) >= MISSING_LIMIT:
+                break
+        if len(items) >= MISSING_LIMIT:
+            break
+    return {"items": items, "raw": sorted(raw_dirs.items()), "extras": extras, "more": len(items) >= MISSING_LIMIT}
+
+
+def _explain(rel: Path) -> dict:
+    """1 枚について、表示されない理由と、表示されるようにするための場所と名前（分かる範囲で）"""
+    parts, fn = rel.parts[:-1], rel.name
+    why: list[str] = []
+    seed = div = probe = None
+    top = parts[0] if parts else ""
+    m = SEED_RE.match(top)
+    if m:
+        seed, probe = dt.datetime.strptime(m.group(1), "%y%m%d").date(), int(m.group(2))
+    else:
+        if not parts:
+            why.append("写真のフォルダの直下にある（播種ごとのフォルダに入っていない）")
+        else:
+            why.append(f"いちばん上のフォルダ名「{top}」が「YYMMDD播種(番号)」の形でない")
+            s = SEEDISH_RE.match(top)
+            if s:
+                try:
+                    seed = dt.datetime.strptime(s.group(1), "%y%m%d").date()
+                except ValueError:
+                    seed = None
+            nums = _probes_in(top)
+            if len(nums) > 1:
+                why[-1] = f"フォルダ「{top}」に Probe 番号が複数ある（1 つのフォルダに Probe 番号は 1 つ）"
+                # 番号ごとのフォルダ（例：day0\5）や、ファイル名の番号（例：260617_5.jpg）から、どの番号かを決める
+                for x in parts[1:]:
+                    if x.isdigit() and int(x) in nums:
+                        probe = int(x)
+                if probe is None:
+                    f = re.match(r"^\d{6}_(\d+)", fn)
+                    if f and int(f.group(1)) in nums:
+                        probe = int(f.group(1))
+            elif len(nums) == 1:
+                probe = nums[0]
+    # DIV（播種からの日数）：DIVn・dayn などのフォルダ名か、ファイル名の撮影日から
+    inner = parts[1:]
+    days = [DAY_RE.match(x) for x in inner]
+    dayi = next((i for i, x in enumerate(days) if x), None)
+    if dayi is not None:
+        div = int(days[dayi].group(1))
+        if not DIV_RE.match(inner[dayi]):
+            why.append(f"日数のフォルダ名「{inner[dayi]}」が「DIV数字」の形でない")
+        if len(inner) > dayi + 1 and not (len(inner) == dayi + 2 and inner[dayi + 1].isdigit()):
+            why.append("DIV フォルダの下に、さらにフォルダがある")
+        elif len(inner) == dayi + 2:
+            why.append("DIV フォルダの下に、Probe 番号ごとのフォルダがある")
+    elif parts:
+        why.append("DIV フォルダ（DIV数字）に入っていない")
+        f = re.match(r"^(\d{6})", fn)
+        if f and seed:
+            try:
+                d = (dt.datetime.strptime(f.group(1), "%y%m%d").date() - seed).days
+                div = d if d >= 0 else None
+            except ValueError:
+                pass
+    if probe is None:
+        f = re.match(r"^\d{6}_(\d+)", fn)
+        probe = int(f.group(1)) if f else None
+    ext = Path(fn).suffix.lower()
+    if ext not in (".jpg", ".jpeg"):
+        why.append(f"JPEG ではない（{ext}）。JPEG（.jpg）に変換が必要")
+    if not IMG_RE.match(fn):
+        why.append("ファイル名が「YYMMDD_番号.jpg」（撮影日_Probe番号）の形でない")
+        if cs.RAW_PATTERN.match(fn):
+            why[-1] += "。合成前の写真なら、DIV フォルダに入れて「合成」で合成すると表示される"
+    elif seed and div is not None:
+        name_date = dt.datetime.strptime(IMG_RE.match(fn).group(1), "%y%m%d").date()
+        if name_date != seed + dt.timedelta(days=div):
+            why.append(f"ファイル名の日付が、播種日＋DIV（{seed + dt.timedelta(days=div):%y%m%d}）と合わない")
+    suggest = None
+    if seed and div is not None and probe is not None:
+        suggest = f"{seed:%y%m%d}播種({probe})\\DIV{div}\\{seed + dt.timedelta(days=div):%y%m%d}_{probe}.jpg"
+    missing = [w for w, ok in (("播種日", seed), ("DIV（播種からの日数）", div is not None), ("Probe 番号", probe is not None)) if not ok]
+    return {"path": str(rel).replace("/", "\\"), "why": why or ["表示される形と違う"], "suggest": suggest,
+            "unknown": missing}
+
+
+MISSING_CSS = """
+.mi{font-size:13px;line-height:1.7}
+.mi h3{font-size:14px;margin:14px 0 6px}
+.mi pre{background:#111113;border:1px solid var(--line,rgba(255,255,255,.08));border-radius:6px;padding:8px 12px;margin:6px 0;
+  font-family:Consolas,monospace;font-size:12.5px;line-height:1.6;overflow:auto}
+.mi table{border-collapse:collapse;width:100%;margin-top:6px}
+.mi th,.mi td{border-bottom:1px solid rgba(255,255,255,.08);padding:6px 8px;text-align:left;vertical-align:top}
+.mi th{color:#a1a1aa;font-weight:400;font-size:12px}
+.mi td code,.mi li code,.mi p code{font-family:Consolas,monospace;font-size:12.5px;word-break:break-all}
+.mi td.sg code{color:#4ade80}
+.mi td ul{margin:0;padding-left:16px}
+.mi .q{color:#a1a1aa}
+"""
+
+
+def render_missing(info: dict) -> str:
+    """見比べに出ない画像の一覧（HTML の一部）。見比べの画面と、画像が 1 枚もないときの案内で使う"""
+    esc = html.escape
+    out = ['<div class="mi">',
+           '<p>見比べに表示されるのは、写真のフォルダの中で、次の形に置いた合成画像だけです。'
+           '播種日・Probe番号・播種からの日数（DIV：Days In Vitro）・撮影日を、フォルダ名とファイル名から読み取ります。</p>',
+           '<pre>（写真のフォルダ）\n'
+           '  └ 261028播種(6)         … 播種日(YYMMDD)播種(Probe番号)。1 つのフォルダに Probe 番号は 1 つ\n'
+           '      ├ DIV0              … 播種当日を 0 とした日数\n'
+           '      │  └ 261028_6.jpg   … 撮影日(YYMMDD)_Probe番号.jpg（JPEG）\n'
+           '      └ DIV7\n'
+           '         └ 261104_6.jpg</pre>',
+           '<p class="q">表示されない画像を、下の「表示される場所と名前」に移すか名前を変えると、次に「見比べ」を開いたときから表示されます。'
+           'このツールがファイルを動かすことはありません。</p>']
+    items = info["items"]
+    if items:
+        out.append(f'<h3>表示されていない画像（{len(items)}{" 件以上" if info["more"] else " 件"}）</h3>'
+                   '<table><tr><th>いまの場所</th><th>表示されない理由</th><th>表示される場所と名前</th></tr>')
+        for it in items:
+            sg = (f'<code>{esc(it["suggest"])}</code>' if it["suggest"] else
+                  f'<span class="q">{esc("・".join(it["unknown"]))}が分からないため、上の形を見て決めてください</span>')
+            out.append(f'<tr><td><code>{esc(it["path"])}</code></td>'
+                       f'<td><ul>{"".join(f"<li>{esc(w)}</li>" for w in it["why"])}</ul></td><td class="sg">{sg}</td></tr>')
+        out.append("</table>")
+    else:
+        out.append('<h3>表示されていない合成画像はありません</h3>')
+    if info["raw"]:
+        out.append('<h3>合成前の写真（IMG_数字.JPG）があるフォルダ</h3><p class="q">合成画像がまだないフォルダは、「合成」で合成画像を作ると表示されます。</p><ul>'
+                   + "".join(f'<li><code>{esc(k)}</code>　{n} 枚</li>' for k, n in info["raw"]) + "</ul>")
+    if info["extras"]:
+        out.append(f'<p class="q">合成画像のある DIV フォルダの、それ以外の写真（拡大写真など）{info["extras"]} 枚は、'
+                   '追加の写真として表示の対象外にしています。</p>')
+    out.append("</div>")
+    return "".join(out)
+
+
 # ---------------------------------------------------------------- 画面
 
 # 単体で起動したときのロゴ（culture-tools のロゴの色を反転したもの）
@@ -297,6 +472,11 @@ body.one-B #cB{justify-content:flex-start}
 #warns{display:none;position:absolute;right:16px;top:56px;z-index:20;max-width:560px;background:#1f1f23;
   border:1px solid var(--line);border-radius:8px;padding:8px 16px;font-size:12px}
 #warns.open{display:block}
+#missing{display:none;position:absolute;right:16px;top:56px;z-index:25;width:min(1100px,calc(100vw - 32px));
+  max-height:calc(100vh - 80px);overflow:auto;background:#1f1f23;border:1px solid var(--line);border-radius:10px;
+  padding:4px 18px 14px;box-shadow:0 12px 32px rgba(0,0,0,.5)}
+#missing.open{display:block}
+#missing .mh{display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:#1f1f23;padding:8px 0}
 #warns li{margin:4px 0}
 #done{display:none;position:fixed;inset:0;background:var(--bg);align-items:center;justify-content:center;
   font-size:15px;z-index:50}
@@ -566,6 +746,17 @@ function init() {
   $('swap').onclick = () => { const a = P.A.id, b = P.B.id; setEntry('A', b); setEntry('B', a); };
   $('fit').onclick = () => { for (const p of ['A', 'B']) Object.assign(V[p], {cx: .5, cy: .5, z: 1}); render('A'); render('B'); };
   if ($('warnBtn')) $('warnBtn').onclick = () => $('warns').classList.toggle('open');
+  // 見比べに出ない画像：押したときに写真のフォルダを調べる（フォルダが大きいと少し時間がかかる）
+  $('missBtn').onclick = async ev => {
+    ev.stopPropagation();
+    const m = $('missing');
+    if (m.classList.toggle('open') && !m.dataset.done) {
+      $('missBody').textContent = '写真のフォルダを調べています…';
+      try { $('missBody').innerHTML = await (await fetch('/missing?t=' + T)).text(); m.dataset.done = '1'; }
+      catch (e) { $('missBody').textContent = '調べられませんでした'; }
+    }
+  };
+  $('missClose').onclick = () => $('missing').classList.remove('open');
   const dv = $('divider'), stage = $('stage');
   dv.addEventListener('pointerdown', ev => {
     dv.setPointerCapture(ev.pointerId);
@@ -608,7 +799,8 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
              '<div class="seg"><button id="sync" class="on" title="片方を拡大・移動すると、もう片方も同じ位置に動く">拡大を連動</button></div>'
              '<button class="btn" id="fit" title="ダブルクリックでも全体表示に戻る">全体表示</button>'
              '<button class="btn" id="swap">左右を入れ替え</button>'
-             f'{warn_btn}<button class="btn" id="quit">終了</button></div>')
+             f'{warn_btn}<button class="btn" id="missBtn" title="写真のフォルダの中で、見比べに表示されていない画像と、表示されるようにする方法を調べる">表示されない画像</button>'
+             '<button class="btn" id="quit">終了</button></div>')
     brand = brand or (LOGO.replace("<svg ", "<svg aria-hidden='true' ")
                       + '<span class="name">culture-<b>viewer</b></span>')
     header = f'<header class="top">{brand}{tools}</header>'
@@ -622,8 +814,10 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
                     f'<div class="strip"><div class="sb" id="s{p}"></div></div></div>')
     warn_list = "".join(f"<li>{html.escape(w)}</li>" for w in warns)
     return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>見比べ | culture-tools</title>'
-            f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}</style><body>'
+            f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}{MISSING_CSS}</style><body>'
             f'{header}<div id="warns"><ul>{warn_list}</ul></div>'
+            '<div id="missing"><div class="mh"><b>見比べに表示されない画像</b><button class="btn" id="missClose">閉じる</button></div>'
+            '<div id="missBody"></div></div>'
             f'<div id="ctrl">{panel("A")}<div id="mid"><div id="rel"></div><div id="hint">ホイール・ピンチで拡大　ドラッグで移動　ダブルクリックで全体　←→ で B の日付を送る（Shift で A）</div></div>{panel("B")}</div>'
             f'<div id="stage">{vp("A")}{vp("B")}<div id="divider"></div>'
             f'<div id="done">終了しました。このタブは閉じて構いません。</div>'
@@ -632,7 +826,7 @@ def render_page(entries: list[dict], samples: list[dict], warns: list[str], toke
 
 # ---------------------------------------------------------------- 配信
 
-def serve(entries: list[dict], samples: list[dict], warns: list[str], open_browser: bool) -> None:
+def serve(entries: list[dict], samples: list[dict], warns: list[str], open_browser: bool, root: Path | None = None) -> None:
     token = secrets.token_urlsafe(16)
     page = render_page(entries, samples, warns, token).encode("utf-8")
     last_ping = [time.monotonic() + 60]
@@ -670,6 +864,8 @@ def serve(entries: list[dict], samples: list[dict], warns: list[str], open_brows
             parts = u.path.strip("/").split("/")
             if parts == [""]:
                 return self._send(200, page, "text/html; charset=utf-8")
+            if parts == ["missing"] and root is not None:
+                return self._send(200, render_missing(diagnose(root, entries)).encode("utf-8"), "text/html; charset=utf-8")
             if len(parts) == 2 and parts[0] == "scale" and parts[1].isdigit() and int(parts[1]) < len(entries):
                 body = json.dumps(scale_info(entries[int(parts[1])])).encode("utf-8")
                 return self._send(200, body, "application/json")
@@ -737,9 +933,12 @@ def main() -> None:
     for w in warns:
         print(f"  注意: {w}")
     if not entries:
-        print("見比べられる合成画像が見つかりませんでした。")
+        print("見比べられる合成画像が見つかりませんでした。見比べに出すには、合成画像を次の形に置いてください。")
+        print("  （写真のフォルダ）\\YYMMDD播種(Probe番号)\\DIV数字\\YYMMDD_Probe番号.jpg　例：261028播種(6)\\DIV7\\261104_6.jpg")
+        for it in diagnose(root, entries)["items"][:50]:
+            print(f"  表示されない画像: {it['path']}　→ {it['suggest'] or '（場所と名前を決められません）'}　理由: {' / '.join(it['why'])}")
         sys.exit(3)
-    serve(entries, group(entries), warns, "--no-open" not in sys.argv)
+    serve(entries, group(entries), warns, "--no-open" not in sys.argv, root)
 
 
 if __name__ == "__main__":
