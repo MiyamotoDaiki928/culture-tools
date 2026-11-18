@@ -6,7 +6,6 @@
 ブラウザで画面を開き、次の 2 つをボタン 1 つで作る。
   ・今日撮影するMEA-Probe の DIV フォルダ（YYMMDD播種(Probe 番号)\\DIVn。n は播種日からの日数で自動計算）
   ・新しく播種したMEA-Probe のフォルダ（YYMMDD播種(Probe 番号)\\DIV0。同じ日に複数播種したときは、番号ごとに別のフォルダ）
-以前の形の名前（YYMMDD播種(番号)）のフォルダもそのまま使え、画面の案内から新しい形に変えられる。
 新しく播種したMEA-Probe は 1 つずつ Probe 番号と電極の種類（545 / 515）を入れる。種類は app\\probes.json に記録し、
 撮影（撮る枚数）と合成（合成するかどうか）で使う。
 既にあるフォルダは作り直さず、ファイルの移動や削除は一切しない。
@@ -34,7 +33,7 @@ import culture_stitch as cs
 
 RECENT_COUNT = 6      # 新しく播種した順に、この件数を最初から一覧に出す（残りは「以前のMEA-Probe も表示」で出す）
 
-SEED_RE = cs.SEED_RE     # 播種フォルダの名前（新しい形 YYMMDD播種(Probe N) と、以前の形 YYMMDD播種(N)）
+SEED_RE = cs.SEED_RE     # 播種フォルダの名前（YYMMDD播種(Probe N)）
 DIV_RE = re.compile(r"^DIV(\d+)$", re.IGNORECASE)
 
 # 単体で起動したときのロゴ（culture-tools と同じ円に、フォルダを足す「＋」）
@@ -78,20 +77,19 @@ def create(root: Path, body: dict) -> list[dict]:
     if new.get("probes"):
         date = dt.date.fromisoformat(new["date"])
         types = cs.load_types()
-        existing = {(s["seed"], s["probe"]): s["key"] for s in scan(root)}
         done: set[int] = set()
         for item in new["probes"]:
-            # {"n": 番号, "type": "545" / "515"}。以前の形（番号だけ）も受け付け、そのときは 545 とする
-            n, kind = (item.get("n"), item.get("type")) if isinstance(item, dict) else (item, cs.DEFAULT_TYPE)
+            if not isinstance(item, dict):                 # {"n": 番号, "type": "545" / "515"}
+                continue
+            n, kind = item.get("n"), item.get("type")
             if not (isinstance(n, int) and 0 < n < 1000) or n in done:
                 continue
             done.add(n)
             kind = kind if kind in cs.PROBE_TYPES else cs.DEFAULT_TYPE
-            # 同じ播種日・Probe 番号のフォルダが以前の形の名前で既にあれば、それを使う（同じ MEA-Probe のフォルダを 2 つ作らない）
-            key = existing.get((date.isoformat(), n)) or cs.seed_name(date, n)
+            key = cs.seed_name(date, n)
             r = make(root / key / "DIV0", f"{key}\\DIV0　{kind}電極")
             if r["ok"]:
-                prev = types.get(cs.canonical(key))
+                prev = types.get(key)
                 if prev != kind:
                     try:
                         cs.save_type(key, kind)
@@ -101,13 +99,6 @@ def create(root: Path, body: dict) -> list[dict]:
                         r.update(ok=False, msg=f"電極の種類を記録できませんでした（{e}）")
             out.append(r)
     return out
-
-
-def rename_old(root: Path) -> dict:
-    """以前の形の名前の播種フォルダを新しい形に変え、結果と、変えたあとの一覧を返す"""
-    results = cs.rename_old_dirs(root)
-    return {"results": results, "seeds": scan(root),
-            "old": [{"old": d.name, "new": new} for d, new in cs.old_seed_dirs(root)]}
 
 
 def make(path: Path, label: str) -> dict:
@@ -164,11 +155,6 @@ h2 .sub{font-weight:400;color:var(--quiet);font-size:13px}
 .add{background:none;border:1px dashed rgba(255,255,255,.18);color:var(--quiet);border-radius:8px;padding:6px 12px;font:inherit;
   cursor:pointer;margin:6px 0 10px}
 .add:hover{color:var(--ink);border-color:rgba(255,255,255,.3)}
-#old{background:var(--card);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:10px 16px;margin:16px 0 0;font-size:13px;line-height:1.8}
-#old p{margin:0 0 4px}
-#old ul{margin:4px 0 10px;padding-left:20px;font-family:Consolas,"Yu Gothic UI",monospace;font-size:12.5px}
-#old li.ng{color:var(--bad)}
-#old code{font-family:Consolas,monospace}
 input[type=text]{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;
   padding:5px 8px;font:inherit;color-scheme:dark}
 .list{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -267,11 +253,11 @@ function render() {
   $('more').textContent = showAll ? '最近のMEA-Probe だけ表示' : `以前のMEA-Probe も表示（${older} 件）`;
   const probes = parseProbes();
   const sd = $('seedDate').dataset.value, yymmdd = sd.slice(2, 4) + sd.slice(5, 7) + sd.slice(8, 10);
-  const have = new Map(seeds.map(s => [`${s.seed}|${s.probe}`, s]));
+  const have = new Map(seeds.map(s => [s.key, s.type]));
   $('newHint').innerHTML = probes.length
     ? '作成するフォルダ：<br>' + probes.map(p => {
-        const h = have.get(`${sd}|${p.n}`), k = h ? h.key : `${yymmdd}播種(Probe ${p.n})`;
-        const note = !h ? '' : h.type === p.type ? '（既にあります）' : `（既にあります。電極の種類を ${p.type} に変更します）`;
+        const k = `${yymmdd}播種(Probe ${p.n})`;
+        const note = !have.has(k) ? '' : have.get(k) === p.type ? '（既にあります）' : `（既にあります。電極の種類を ${p.type} に変更します）`;
         return `<code>${k}\\DIV0</code>　${p.type}電極${note}`;
       }).join('<br>')
     : 'Probe 番号を入れると、作成するフォルダ名がここに表示されます。同じ日に複数播種したときは「MEA-Probe を追加」で欄を増やします';
@@ -329,26 +315,6 @@ function parseProbes() {
 }
 $('more').onclick = () => { showAll = !showAll; render(); };
 
-// 以前の形の名前（YYMMDD播種(N)）のフォルダを、新しい形（YYMMDD播種(Probe N)）に変える
-function renderOld(list, results) {
-  const box = $('old');
-  if (!list.length && !results) { box.style.display = 'none'; return; }
-  box.style.display = '';
-  const res = results ? results.map(r => `<li class="${r.ok ? '' : 'ng'}">${r.old} → ${r.new}　${r.msg}</li>`).join('') : '';
-  box.innerHTML = list.length
-    ? `<p>フォルダ名が以前の形（<code>YYMMDD播種(番号)</code>）のフォルダが ${list.length} 個あります。`
-      + '新しい形（<code>YYMMDD播種(Probe 番号)</code>）に変えます。中の写真やファイルには手を加えません。</p>'
-      + `<ul>${list.map(o => `<li>${o.old} → ${o.new}</li>`).join('')}</ul>`
-      + (res ? `<ul>${res}</ul>` : '') + '<button class="btn" id="renameOld">フォルダ名を新しい形に変える</button>'
-    : `<p>フォルダ名を新しい形に変えました。</p><ul>${res}</ul>`;
-  if ($('renameOld')) $('renameOld').onclick = async () => {
-    $('renameOld').disabled = true;
-    const r = await post('/rename', {});
-    seeds = r.seeds; renderOld(r.old, r.results); render();
-  };
-}
-renderOld(D.old, null);
-
 $('go').onclick = async () => {
   const probes = parseProbes();
   const res = await post('/create', {shoot: $('shoot').dataset.value, keys: [...picked],
@@ -375,18 +341,17 @@ addRow();
 """
 
 
-def render_page(seeds: list[dict], token: str, brand: str | None = None, root: Path | None = None) -> str:
+def render_page(seeds: list[dict], token: str, brand: str | None = None) -> str:
     brand = brand or LOGO + '<span class="name">culture-<b>folders</b></span>'
     today = dt.date.today().isoformat()
     types = [{"id": k, "need": v} for k, v in cs.PROBE_TYPES.items()]
-    old = [{"old": d.name, "new": new} for d, new in cs.old_seed_dirs(root)] if root else []
-    data = json.dumps({"token": token, "today": today, "recent": RECENT_COUNT, "seeds": seeds, "types": types, "old": old},
+    data = json.dumps({"token": token, "today": today, "recent": RECENT_COUNT, "seeds": seeds, "types": types},
                       ensure_ascii=False)
     data = data.replace("</", "<\\/")
     return (f'<!doctype html><html lang="ja"><meta charset="utf-8"><title>フォルダ作成 | culture-tools</title>'
             f'<link rel="icon" type="image/svg+xml" href="{FAVICON}"><style>{CSS}</style><body>'
             f'<header class="top">{brand}'
-            f'<div class="tools"><button class="btn" id="quit">終了</button></div></header><main><div id="old"></div>'
+            f'<div class="tools"><button class="btn" id="quit">終了</button></div></header><main>'
             f'<h2><span><span id="shootLabel">今日</span>撮影するMEA-Probe</span>'
             f'<span class="sub">撮影日 <button class="date" id="shoot" data-value="{today}"></button></span></h2>'
             f'<div class="list" id="list"></div><button class="more" id="more"></button>'
@@ -426,7 +391,7 @@ def serve(root: Path, open_browser: bool) -> None:
             if not self._ok():
                 return self._send(403, b"forbidden", "text/plain")
             if urlparse(self.path).path == "/":
-                return self._send(200, render_page(scan(root), token, root=root).encode("utf-8"), "text/html; charset=utf-8")
+                return self._send(200, render_page(scan(root), token).encode("utf-8"), "text/html; charset=utf-8")
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
@@ -440,8 +405,6 @@ def serve(root: Path, open_browser: bool) -> None:
             if path == "/create":
                 results = create(root, body)
                 return self._json({"results": results, "seeds": scan(root)})
-            if path == "/rename":
-                return self._json(rename_old(root))
             if path == "/open":
                 p = Path(body.get("path", ""))
                 # 写真のフォルダの中のフォルダだけをエクスプローラーで開く

@@ -3,7 +3,7 @@
 使い方:
     python culture_viewer.py [フォルダ]    フォルダ省略時は、初回に選んだ写真のフォルダを読む
 
-写真のフォルダの「YYMMDD播種(Probe 番号)\\DIVn\\YYMMDD_番号.jpg」（以前の形 YYMMDD播種(番号) も読む）を集め、2 枚を左右に並べて
+写真のフォルダの「YYMMDD播種(Probe 番号)\\DIVn\\YYMMDD_番号.jpg」を集め、2 枚を左右に並べて
 （または重ねて）見比べる画面をブラウザで開く。画像を表示する枠の下に黒い帯を常に表示し、その右端にスケールバー
 （縦横に隣り合う電極の中心間距離：545電極は 450 µm、515電極は 150 µm）を、いまの拡大率に合わせた長さで表示する。画像は読むだけで、写真のフォルダ内のファイルは変更しない。
 画面を閉じるか「終了」を押すと、このツールも終了する。
@@ -37,7 +37,7 @@ import culture_stitch as cs
 MEDIUM = 2400                              # 通常表示に使う縮小画像の長辺。これより拡大すると原寸を読む
 SCALE_CACHE = Path(__file__).resolve().parent / "scale_cache.json"   # 画像ごとに求めた電極間距離の記録（2 回目から速くする）
 
-SEED_RE = cs.SEED_RE     # 播種フォルダの名前（新しい形 YYMMDD播種(Probe N) と、以前の形 YYMMDD播種(N)）
+SEED_RE = cs.SEED_RE     # 播種フォルダの名前（YYMMDD播種(Probe N)）
 DIV_RE = re.compile(r"^DIV(\d+)$", re.IGNORECASE)
 IMG_RE = re.compile(r"^(\d{6})_(\d+)\.jpe?g$", re.IGNORECASE)
 LOOKS_LIKE = re.compile(r"^\d+_\d+\.jpe?g$", re.IGNORECASE)   # 合成画像らしいが名前の形式が違うもの

@@ -62,10 +62,8 @@ def save_root(root: Path) -> None:
 
 # ---------------------------------------------------------------- 電極の種類
 
-# 播種フォルダの名前：YYMMDD播種(Probe N)（例：260928播種(Probe 9)）。1 つのフォルダに Probe 番号は 1 つ。
-# 以前の形 YYMMDD播種(N)（例：260928播種(9)）も読めるようにしておき、「フォルダ作成」で新しい形に変えられる。
-SEED_RE = re.compile(r"^(\d{6})播種\((?:Probe ?)?(\d+)\)$", re.IGNORECASE)
-OLD_SEED_RE = re.compile(r"^(\d{6})播種\(([\d\s,、]+)\)$")     # 以前の形（番号だけ。複数の番号を書いたものも含む）
+# 播種フォルダの名前：YYMMDD播種(Probe N)（例：260928播種(Probe 9)）。1 つのフォルダに Probe 番号は 1 つ
+SEED_RE = re.compile(r"^(\d{6})播種\(Probe (\d+)\)$")
 
 
 def seed_name(date: dt.date, probe: int) -> str:
@@ -73,100 +71,25 @@ def seed_name(date: dt.date, probe: int) -> str:
     return f"{date:%y%m%d}播種(Probe {probe})"
 
 
-def canonical(name: str) -> str:
-    """以前の形の名前も、新しい形の名前にそろえる（電極の種類の記録の見出しに使う）"""
-    m = SEED_RE.match(name)
-    return seed_name(dt.datetime.strptime(m.group(1), "%y%m%d").date(), int(m.group(2))) if m else name
-
-
-def old_seed_dirs(root: Path) -> list[tuple[Path, str]]:
-    """以前の形の名前の播種フォルダと、新しい形の名前"""
-    out = []
-    try:
-        dirs = sorted(d for d in root.iterdir() if d.is_dir())
-    except OSError:
-        return out
-    for d in dirs:
-        m = OLD_SEED_RE.match(d.name)
-        nums = re.findall(r"\d+", m.group(2)) if m else []
-        if nums:
-            out.append((d, f"{m.group(1)}播種(Probe {', '.join(nums)})"))
-    return out
-
-
-def rename_old_dirs(root: Path) -> list[dict]:
-    """以前の形の播種フォルダの名前を、新しい形に変える。中のファイルには手を加えない。
-    名前を変えたフォルダを指している記録（電極の種類、見比べのスケールバー、前回の合成結果）も書き換える。"""
-    results, renamed = [], {}
-    for d, new in old_seed_dirs(root):
-        target = d.with_name(new)
-        if target.exists():
-            results.append({"ok": False, "old": d.name, "new": new, "msg": "同じ名前のフォルダが既にあるため、変えていません"})
-            continue
-        try:
-            d.rename(target)
-        except OSError as e:
-            results.append({"ok": False, "old": d.name, "new": new,
-                            "msg": f"変えられませんでした（中のファイルを開いているかもしれません：{e}）"})
-            continue
-        renamed[d.name] = new
-        results.append({"ok": True, "old": d.name, "new": new, "msg": "変えました"})
-        print(f"  フォルダ名を変えました: {d.name} → {new}")
-    if renamed:
-        _follow_renames(renamed)
-    return results
-
-
-def _follow_renames(renamed: dict[str, str]) -> None:
-    """記録ファイルの中の、名前を変えたフォルダを指す文字列（フォルダ名そのもの、またはパスの一部）を書き換える"""
-    def fix(s: str) -> str:
-        if s in renamed:
-            return renamed[s]
-        for old, new in renamed.items():
-            s = s.replace(f"\\{old}\\", f"\\{new}\\").replace(f"/{old}/", f"/{new}/")
-            if s.endswith(f"\\{old}") or s.endswith(f"/{old}"):
-                s = s[: -len(old)] + new
-        return s
-
-    def walk(v):
-        if isinstance(v, str):
-            return fix(v)
-        if isinstance(v, list):
-            return [walk(x) for x in v]
-        if isinstance(v, dict):
-            return {fix(k): walk(x) for k, x in v.items()}
-        return v
-
-    for f in (TYPES_FILE, TOOL_DIR.parent / "viewer" / "scale_cache.json", MANIFEST):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        try:
-            f.write_text(json.dumps(walk(data), ensure_ascii=False, indent=1 if f == TYPES_FILE else None), encoding="utf-8")
-        except OSError:
-            pass
-
-
 def load_types() -> dict[str, str]:
-    """播種フォルダ名（例：261118播種(Probe 3)）→ 電極の種類（"545" / "515"）。以前の形の名前は新しい形にそろえて読む"""
+    """播種フォルダ名（例：261118播種(Probe 3)）→ 電極の種類（"545" / "515"）"""
     try:
         d = json.loads(TYPES_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {canonical(k): v for k, v in d.items() if v in PROBE_TYPES} if isinstance(d, dict) else {}
+    return {k: v for k, v in d.items() if v in PROBE_TYPES} if isinstance(d, dict) else {}
 
 
 def save_type(seed_key: str, kind: str) -> None:
     if kind not in PROBE_TYPES:
         raise ValueError(kind)
     types = load_types()
-    types[canonical(seed_key)] = kind
+    types[seed_key] = kind
     TYPES_FILE.write_text(json.dumps(dict(sorted(types.items())), ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def type_of(seed_key: str, types: dict[str, str] | None = None) -> str:
-    return (load_types() if types is None else types).get(canonical(seed_key), DEFAULT_TYPE)
+    return (load_types() if types is None else types).get(seed_key, DEFAULT_TYPE)
 
 
 def need_of(kind: str) -> int:
@@ -194,7 +117,7 @@ class FolderInfo:
 def parse_folder(folder: Path, raw_files: list[Path], types: dict[str, str] | None = None) -> FolderInfo:
     """フォルダ名から Probe 番号・播種日・DIV（Days In Vitro: 播種後経過日数）を読み取る。
 
-    想定する構成: 261028播種(Probe 6)/DIV7（1 つの播種フォルダに Probe 番号は 1 つ。以前の形 261028播種(6) も読む）
+    想定する構成: 261028播種(Probe 6)/DIV7（1 つの播種フォルダに Probe 番号は 1 つ）
     """
     probe = seed = div = None
     kind = DEFAULT_TYPE
